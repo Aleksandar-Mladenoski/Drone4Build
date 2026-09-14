@@ -2,12 +2,8 @@ import '../../../packages/core/src/ui.css';
 import { createScorm } from '../../../packages/core/src/scorm.ts';
 import { createTranslator } from '../../../packages/core/src/locale.ts';
 import en from '../locales/en.json';
-import { checks, decide, evaluate, missionIds, missions, newRound, passed, platforms, roundScore, sensors, totalScore, type Check, type MissionId, type Platform, type RoundState, type Sensor } from './rules.ts';
+import { mount, newBuild, recordTest, removeSensor, testOutcome, type Build, type Part, type Platform, type Sensor, type TestOutcome } from './rules.ts';
 import './style.css';
-
-type Phase = 'intro' | 'active' | 'between' | 'results';
-type Notice = { key: string; issues: ('platform' | 'sensor' | 'readiness')[]; good: boolean } | null;
-type AppState = { phase: Phase; missionIndex: number; rounds: RoundState[]; notice: Notice };
 
 const scorm = createScorm('m1-1-mission-loadout');
 const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
@@ -17,159 +13,162 @@ const t = translator.t;
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root unavailable');
 document.title = `Drone4Build · ${t('title')}`;
-document.documentElement.lang = translator.locale === 'en' ? 'en' : translator.locale;
-
-function freshState(): AppState {
-  return { phase: 'intro', missionIndex: 0, rounds: missions.map(() => newRound()), notice: null };
-}
-
-function validState(value: unknown): value is AppState {
-  if (!value || typeof value !== 'object') return false;
-  const state = value as Partial<AppState>;
-  if (!['intro', 'active', 'between', 'results'].includes(state.phase || '')) return false;
-  if (typeof state.missionIndex !== 'number' || !Number.isInteger(state.missionIndex) || state.missionIndex < 0 || state.missionIndex > 2) return false;
-  if (!Array.isArray(state.rounds) || state.rounds.length !== missions.length) return false;
-  if (state.notice !== null && state.notice !== undefined && (typeof state.notice !== 'object' || typeof state.notice.key !== 'string' || !Array.isArray(state.notice.issues) || typeof state.notice.good !== 'boolean')) return false;
-  return state.rounds.every((round) => round && typeof round === 'object' &&
-    (round.platform === null || platforms.includes(round.platform)) &&
-    (round.sensor === null || sensors.includes(round.sensor)) &&
-    checks.every((check) => typeof round.inspected?.[check] === 'boolean' && typeof round.resolved?.[check] === 'boolean') &&
-    ['hold', 'clear', null].includes(round.firstDecision) &&
-    ['platform', 'sensor', 'readiness', 'judgement'].every((key) => typeof round.penalties?.[key as keyof RoundState['penalties']] === 'boolean') &&
-    typeof round.cleared === 'boolean');
-}
-
-const saved = scorm.load<unknown>();
-let state = validState(saved) ? saved : freshState();
-
-function persist() { scorm.save(state); }
+document.documentElement.lang = translator.locale;
 
 function esc(value: string | number): string {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 }
-function tx(key: string, values?: Record<string, string | number>) { return esc(t(key, values)); }
-
-const icons: Record<Platform | Sensor, string> = {
-  multirotor: '<circle cx="30" cy="22" r="5"/><circle cx="70" cy="22" r="5"/><circle cx="30" cy="58" r="5"/><circle cx="70" cy="58" r="5"/><path d="M50 40 30 22m20 18 20-18M50 40 30 58m20-18 20 18"/><rect x="42" y="34" width="16" height="12" rx="4"/>',
-  fixedWing: '<path d="M50 12v56M46 34 14 47v8l36-8 36 8v-8L54 34M39 62l11-5 11 5"/>',
-  vtol: '<circle cx="20" cy="18" r="5"/><circle cx="80" cy="18" r="5"/><circle cx="20" cy="62" r="5"/><circle cx="80" cy="62" r="5"/><path d="m20 18 30 15 30-15M20 62l30-15 30 15M50 14v52M36 40h28"/>',
-  rgb: '<rect x="18" y="21" width="64" height="42" rx="6"/><circle cx="50" cy="42" r="13"/><path d="m28 21 5-8h34l5 8M34 70h32"/>',
-  thermal: '<rect x="17" y="17" width="66" height="48" rx="5"/><path d="M30 56c-5-8 5-10 1-19s11-10 10-18M49 58c-4-8 7-11 2-20s12-9 10-18M67 57c-5-7 6-11 2-19"/>',
-  lidar: '<path d="m50 10 30 18v35L50 80 20 63V28zM20 28l30 18 30-18M50 46v34M32 39l30-18M38 60l8-5m14 2 8-5"/>',
-};
-function icon(id: Platform | Sensor) {
-  return `<svg class="equipment-icon" viewBox="0 0 100 90" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[id]}</svg>`;
+function tx(key: string, values?: Record<string, string | number>): string { return esc(t(key, values)); }
+function isBuild(value: unknown): value is Build {
+  if (!value || typeof value !== 'object') return false;
+  const b = value as Partial<Build>;
+  return (b.platform === null || b.platform === 'fixedWing' || b.platform === 'multirotor') &&
+    (b.sensor === null || b.sensor === 'rgb' || b.sensor === 'thermal') &&
+    (b.battery === 'low' || b.battery === 'charged') && typeof b.angle === 'number' &&
+    typeof b.tests === 'number' && (b.lastTest === null || (typeof b.lastTest === 'object' && typeof b.lastTest?.success === 'boolean'));
 }
+let build = isBuild(scorm.load<unknown>()) ? scorm.load<Build>()! : newBuild();
+let phase: 'bench' | 'test' = 'bench';
+let held: Part | null = null;
+let inspection = false;
+let hint = '';
+let running = false;
+let frameId = 0;
+let testStart = 0;
+let testDone = false;
+let captured = 0;
+const TEST_MS = 9000;
+function save() { scorm.save(build); }
+
+function aircraft(platform: Platform | null) {
+  if (platform === 'multirotor') return `<svg viewBox="0 0 280 220" class="craft-svg multirotor" aria-hidden="true"><g class="rotors"><circle cx="56" cy="45" r="31"/><circle cx="224" cy="45" r="31"/><circle cx="56" cy="175" r="31"/><circle cx="224" cy="175" r="31"/></g><g class="arms"><path d="M140 108 56 45M140 108l84-63M140 108 56 175M140 108l84 67"/></g><path class="aircraft-body" d="M109 70h62l17 37-17 43h-62l-17-43z"/><path class="nose" d="m127 72 13-20 13 20"/><path class="detail" d="M122 96h36m-36 18h36m-21 17h6"/></svg>`;
+  if (platform === 'fixedWing') return `<svg viewBox="0 0 280 220" class="craft-svg fixedwing" aria-hidden="true"><path class="wing" d="M136 23h8l9 74 103 27v31l-103-9-7 53h-12l-7-53-103 9v-31l103-27z"/><path class="aircraft-body" d="M127 38h26l7 109-13 42h-14l-13-42z"/><path class="detail" d="M129 69h22m-24 16h26m-40 62h54"/></svg>`;
+  return `<div class="empty-craft" aria-hidden="true">+</div>`;
+}
+function sensorArt(sensor: Sensor | null) {
+  if (sensor === 'rgb') return `<svg viewBox="0 0 90 70" aria-hidden="true"><rect x="12" y="18" width="66" height="45" rx="8"/><path d="m24 18 6-11h34l6 11"/><circle cx="45" cy="40" r="15"/><circle cx="45" cy="40" r="7"/></svg>`;
+  if (sensor === 'thermal') return `<svg viewBox="0 0 90 70" aria-hidden="true"><rect x="12" y="16" width="66" height="47" rx="8"/><path d="M28 54c-9-13 10-14 0-32m16 34c-8-12 9-14 1-34m16 34c-9-13 9-17 2-34"/></svg>`;
+  return `<div class="empty-socket">+</div>`;
+}
+function batteryArt(charged: boolean) { return `<span class="battery-shape ${charged ? 'charged' : 'low'}" aria-hidden="true"><span class="battery-cap"></span><span class="battery-level"></span><span class="battery-bolt">ϟ</span></span>`; }
 
 function header() {
   const snap = scorm.snapshot();
-  const statusKey = ['incomplete', 'passed', 'failed', 'completed'].includes(snap.status) ? snap.status : 'incomplete';
-  return `<header class="app-header"><div class="brand"><span class="brand-mark" aria-hidden="true">D<span>4</span>B</span><div><div class="eyebrow">${tx('course')}</div><div class="brand-title">${tx('title')} <span>${tx('subtitle')}</span></div></div></div><div class="lms-pill"><span class="status-dot" aria-hidden="true"></span><div>${tx(`status.${snap.mode}`)}<small>${tx('status.score', { status: t(`status.${statusKey}`), score: snap.score })}</small></div></div></header>`;
+  return `<header class="app-header"><div class="brand"><span class="brand-mark" aria-hidden="true">D<span>4</span>B</span><div><div class="eyebrow">${tx('course')}</div><div class="brand-title">${tx('title')} <span>${tx('subtitle')}</span></div></div></div><div class="lms-pill"><span class="status-dot" aria-hidden="true"></span><div>${tx(`status.${snap.mode}`)}<small>${tx('status.tests', { count: build.tests })}</small></div></div></header>`;
 }
-
-function intro() {
-  return `<div class="intro-layout"><section class="panel intro-card"><div class="eyebrow">${tx('course')}</div><h1>${tx('intro.heading')}</h1><p class="intro-copy">${tx('intro.body')}</p><div class="intro-goal"><span class="goal-symbol" aria-hidden="true">◎</span><div><strong>${tx('intro.goal')}</strong><span>${tx('intro.time')}</span></div></div><button class="btn-primary launch" data-action="start">${tx('intro.start')} <span aria-hidden="true">→</span></button></section><div class="intro-art" aria-hidden="true"><div class="blueprint-grid"></div><div class="art-drone">${icon('multirotor')}</div><div class="art-ring ring-one"></div><div class="art-ring ring-two"></div><div class="art-label label-a">01</div><div class="art-label label-b">02</div><div class="art-label label-c">03</div></div></div>`;
+function item(part: Part, nameKey: string, detailKey: string, art: string) {
+  return `<button type="button" draggable="true" class="part ${held === part ? 'held' : ''}" data-part="${part}" aria-pressed="${held === part}" aria-label="${tx(nameKey)}. ${tx(detailKey)}"><span class="part-art">${art}</span><span class="part-name">${tx(nameKey)}</span><span class="part-detail">${tx(detailKey)}</span></button>`;
 }
-
-function equipmentCard(kind: 'platform' | 'sensor', id: Platform | Sensor, selected: boolean) {
-  const label = `${kind}.${id}`;
-  return `<button type="button" class="equipment-card choice" data-action="${kind}" data-id="${id}" aria-pressed="${selected}" aria-label="${tx(label)}: ${tx(`${kind}.${id}.detail`)}"><span class="equipment-visual">${icon(id)}</span><span class="equipment-name">${tx(label)}</span><span class="equipment-detail">${tx(`${kind}.${id}.detail`)}</span><span class="selection-indicator" aria-hidden="true">${selected ? '✓' : '+'}</span></button>`;
+function bench() {
+  const last = build.lastTest;
+  return `<div class="game-layout"><section class="mission-banner"><div><div class="eyebrow">${tx('slice')}</div><h1>${tx('mission.title')}</h1><p>${tx('mission.brief')}</p></div><div class="target-chip"><span aria-hidden="true">▥</span><div><strong>${tx('mission.target')}</strong><small>${tx('mission.targetDetail')}</small></div></div></section>
+  <div class="workshop"><aside class="parts-rack panel"><div class="rack-heading"><span>01</span><div><h2>${tx('rack.platforms')}</h2><p>${tx('rack.platformHint')}</p></div></div>${item('platform:multirotor', 'platform.multirotor', 'platform.multirotor.detail', aircraft('multirotor'))}${item('platform:fixedWing', 'platform.fixedWing', 'platform.fixedWing.detail', aircraft('fixedWing'))}<div class="rack-divider"></div><div class="rack-heading"><span>02</span><div><h2>${tx('rack.payloads')}</h2><p>${tx('rack.payloadHint')}</p></div></div>${item('sensor:rgb', 'sensor.rgb', 'sensor.rgb.detail', sensorArt('rgb'))}${item('sensor:thermal', 'sensor.thermal', 'sensor.thermal.detail', sensorArt('thermal'))}</aside>
+  <main class="bench panel"><div class="bench-top"><div><div class="eyebrow">${tx('bench.label')}</div><h2>${tx('bench.title')}</h2></div><div class="bench-steps">${tx('bench.help')}</div></div><div class="turntable" id="turntable" style="--angle:${build.angle}deg"><div class="turntable-rings"></div><button type="button" class="platform-slot snap-zone" data-slot="platform" aria-label="${tx('bench.platformSlot')}"><span class="craft-wrap">${aircraft(build.platform)}</span></button><div class="craft-shadow"></div><div class="socket-row"><button type="button" class="sensor-slot snap-zone" data-slot="sensor" aria-label="${tx('bench.sensorSlot')}">${sensorArt(build.sensor)}<span>${build.sensor ? tx(`sensor.${build.sensor}`) : tx('bench.emptyPayload')}</span></button><button type="button" class="battery-slot snap-zone ${build.battery}" data-slot="battery" aria-label="${tx('bench.batterySlot')}">${batteryArt(build.battery === 'charged')}<span>${tx(`battery.${build.battery}`)}</span></button></div></div><div class="bench-controls"><div class="rotate-controls"><span>${tx('bench.rotate')}</span><button type="button" data-action="rotate-left" aria-label="${tx('bench.rotateLeft')}">↶</button><button type="button" data-action="rotate-right" aria-label="${tx('bench.rotateRight')}">↷</button></div><button type="button" data-action="remove-sensor" ${build.sensor ? '' : 'disabled'}>${tx('bench.unmount')}</button><button type="button" data-action="inspect-battery">${tx('bench.inspectBattery')}</button></div><div class="bench-message" role="status">${inspection ? `<strong>${tx(`battery.${build.battery}.title`)}</strong> ${tx(`battery.${build.battery}.inspect`)}` : hint ? esc(hint) : tx('bench.defaultHint')}</div><div class="test-controls"><div><div class="eyebrow">${tx('test.label')}</div><p>${last ? tx(last.success ? 'test.lastSuccess' : 'test.lastFailure') : tx('test.firstHint')}</p></div><button type="button" class="btn-primary test-button" data-action="test" ${build.platform && build.sensor ? '' : 'disabled'}>${tx('test.launch')} <span aria-hidden="true">→</span></button></div></main>
+  <aside class="parts-rack service-rack panel"><div class="rack-heading"><span>03</span><div><h2>${tx('rack.service')}</h2><p>${tx('rack.serviceHint')}</p></div></div>${item('battery:charged', 'battery.spare', 'battery.spare.detail', batteryArt(true))}<div class="schematic"><div class="schematic-title">${tx('schematic.title')}</div><div class="schematic-building"><div class="schematic-windows"></div><div class="schematic-crack"></div></div><p>${tx('schematic.body')}</p></div></aside></div></div>`;
 }
-
-function readinessCard(check: Check, ruleId: MissionId, round: RoundState) {
-  const inspected = round.inspected[check];
-  const blocker = missions.find((mission) => mission.id === ruleId)!.blocker === check;
-  const resolved = round.resolved[check];
-  const stateClass = !inspected ? 'unknown' : blocker && !resolved ? 'issue' : 'ready';
-  const status = !inspected ? tx('check.unknown') : blocker ? resolved ? tx('check.resolved') : tx(`check.issue.${ruleId}`) : tx('check.ready');
-  return `<div class="readiness-card ${stateClass}"><div class="readiness-head"><span class="indicator" aria-hidden="true"></span><strong>${tx(`check.${check}`)}</strong><span class="readiness-state">${status}</span></div><div class="readiness-actions">${!inspected ? `<button type="button" data-action="inspect" data-id="${check}">${tx('check.inspect', { item: t(`check.${check}`) })}</button>` : blocker && !resolved ? `<button type="button" class="resolve" data-action="resolve" data-id="${check}">${tx(`check.action.${check}`)}</button><button type="button" class="secondary" data-action="ignore" data-id="${check}">${tx('check.markReady')}</button>` : ''}</div></div>`;
+function testView(outcome: TestOutcome) {
+  return `<div class="test-layout"><div class="test-heading"><div><div class="eyebrow">${tx('test.label')}</div><h1>${tx('test.title')}</h1><p>${tx('test.subtitle')}</p></div><div class="test-run">${tx('test.run', { count: build.tests + 1 })}</div></div><div class="test-grid"><div class="test-stage" id="test-stage"><div class="test-sky"><div class="sun"></div><div class="cloud c1"></div><div class="cloud c2"></div></div><div class="test-ground"></div><div class="test-building"><div class="roof"></div><div class="facade-lines"></div><div class="facade-windows"></div><div class="facade-crack"></div></div><div class="target-outline"></div><div class="flight-track ${outcome.hover ? 'hover-track' : 'sweep-track'}"></div><div class="test-craft" id="test-craft">${aircraft(build.platform)}<span class="test-camera ${build.sensor}">${sensorArt(build.sensor)}</span></div><div class="scan-beam ${outcome.visual ? 'rgb' : 'thermal'}" id="scan-beam"></div><div class="test-abort" id="test-abort">${tx('test.abort')}</div><div class="scene-caption" id="scene-caption" role="status">${tx('test.takingOff')}</div></div><div class="test-side panel"><div class="eyebrow">${tx('test.captureLabel')}</div><h2>${tx('test.captureTitle')}</h2><div class="capture-grid" id="capture-grid">${Array.from({ length: 6 }, (_, index) => `<div class="capture-cell" data-cell="${index}"><span>${index + 1}</span></div>`).join('')}</div><div class="test-progress"><div id="test-progress-bar"></div></div><div class="test-observation" id="test-observation" role="status">${tx('test.observing')}</div><button type="button" class="return-button" data-action="return">${tx('test.return')}</button></div></div></div>`;
 }
-
-function notice() {
-  if (!state.notice) return '';
-  return `<div class="feedback ${state.notice.good ? 'good' : ''}" role="status" aria-label="${tx('a11y.feedback')}"><strong>${tx(state.notice.key)}</strong>${state.notice.issues.length ? `<ul>${state.notice.issues.map((issue) => `<li>${tx(`feedback.issue.${issue}`)}</li>`).join('')}</ul>` : ''}</div>`;
+function render() {
+  const outcome = testOutcome(build);
+  app!.innerHTML = `<div class="shell">${header()}${phase === 'bench' ? bench() : testView(outcome)}</div>`;
 }
-
-function missionView() {
-  const rule = missions[state.missionIndex];
-  const round = state.rounds[state.missionIndex];
-  const between = state.phase === 'between';
-  const progress = (state.missionIndex + (between ? 1 : 0)) / missions.length * 100;
-  return `<div class="mission-layout"><div class="mission-top"><div><span class="eyebrow">${tx('progress.round', { current: state.missionIndex + 1, total: missions.length })}</span><h1>${tx(`mission.${rule.id}.title`)}</h1></div><div class="score-chip">${tx('progress.score', { score: state.rounds.slice(0, state.missionIndex + (between ? 1 : 0)).reduce((sum, item) => sum + roundScore(item), 0) })}</div></div><div class="progress" role="progressbar" aria-label="${tx('a11y.progress')}" aria-valuemin="0" aria-valuemax="3" aria-valuenow="${state.missionIndex + (between ? 1 : 0)}"><span style="width:${progress}%"></span></div><div class="mission-grid"><aside class="mission-card panel"><div class="mission-index">${tx(`mission.${rule.id}.label`)}</div><div class="mission-illustration mission-${rule.id}" aria-hidden="true"><div class="building b1"></div><div class="building b2"></div><div class="survey-line"></div></div><h2>${tx(`mission.${rule.id}.title`)}</h2><p>${tx(`mission.${rule.id}.brief`)}</p><div class="requirement">${tx(`mission.${rule.id}.requirement`)}</div></aside><main class="bay panel"><div class="bay-heading"><div><div class="eyebrow">${tx('bay.title')}</div><h2>${tx('bay.platform')}</h2></div><span class="bay-number">01</span></div><div class="equipment-rack" role="group" aria-label="${tx('bay.platform')}">${platforms.map((id) => equipmentCard('platform', id, round.platform === id)).join('')}</div><div class="bay-heading"><h2>${tx('bay.sensor')}</h2><span class="bay-number">02</span></div><div class="equipment-rack" role="group" aria-label="${tx('bay.sensor')}">${sensors.map((id) => equipmentCard('sensor', id, round.sensor === id)).join('')}</div><p class="bay-note">${tx('bay.selectHint')}</p><div class="bay-heading readiness-heading"><h2>${tx('bay.readiness')}</h2><span class="bay-number">03</span></div><p class="bay-note">${tx('bay.inspectHint')}</p><div class="readiness-grid">${checks.map((check) => readinessCard(check, rule.id, round)).join('')}</div><div class="positioning-note">${tx('bay.positioning')}</div>${notice()}${between ? `<div class="actions"><button type="button" class="btn-primary" data-action="next">${tx(state.missionIndex === missions.length - 1 ? 'feedback.results' : 'feedback.next')} <span aria-hidden="true">→</span></button></div>` : `<div class="decision-bar"><div><div class="eyebrow">${tx('bay.decision')}</div><p>${tx('decision.help')}</p></div><div class="actions"><button type="button" data-action="hold">${tx('decision.hold')}</button><button type="button" class="btn-primary" data-action="clear">${tx('decision.clear')}</button></div></div>`}</main></div></div>`;
+function setHint(key: string) { hint = t(key); inspection = false; render(); }
+function applyPart(part: Part) {
+  build = mount(build, part); held = null; inspection = false; hint = t('bench.mounted'); save(); render();
 }
-
-function results() {
-  const score = totalScore(state.rounds);
-  const success = passed(state.rounds);
-  return `<section class="results panel"><div class="eyebrow">${tx('results.heading')}</div><div class="result-medallion ${success ? 'pass' : 'fail'}" aria-hidden="true">${success ? '✓' : '↺'}</div><h1 tabindex="-1">${tx(success ? 'results.pass' : 'results.fail')}</h1><div class="final-score">${tx('results.score', { score })}</div><div class="threshold">${tx('results.threshold')}</div><p>${tx('results.explanation')}</p><div class="mission-breakdown">${missions.map((mission, index) => `<div><span>${tx(`mission.${mission.id}.label`)}</span><strong>${tx('results.points', { score: roundScore(state.rounds[index]) })}</strong></div>`).join('')}</div><p class="muted">${tx('results.saved')}</p><button type="button" class="btn-primary" data-action="replay">${tx('results.replay')}</button></section>`;
+function startTest() {
+  if (!build.platform || !build.sensor) return;
+  phase = 'test'; running = true; testDone = false; captured = 0; testStart = performance.now(); render();
+  frameId = requestAnimationFrame(animateTest);
 }
-
-function render(focus?: { action: string; id?: string }) {
-  app!.innerHTML = `<div class="shell">${header()}${state.phase === 'intro' ? intro() : state.phase === 'results' ? results() : missionView()}</div>`;
-  if (focus) {
-    const selector = focus.id ? `[data-action="${focus.action}"][data-id="${focus.id}"]` : `[data-action="${focus.action}"]`;
-    app!.querySelector<HTMLElement>(selector)?.focus();
+function captureCell(cell: HTMLElement, outcome: TestOutcome) {
+  const kind = !outcome.hover ? 'missed' : outcome.visual ? 'visual' : 'heat';
+  cell.classList.add('captured', kind);
+  cell.innerHTML = kind === 'visual' ? '<i class="mini-window"></i><i class="mini-crack"></i>' : kind === 'heat' ? '<i class="heat-glow"></i>' : '<i class="sky-sliver"></i>';
+}
+function animateTest(now: number) {
+  if (!running || phase !== 'test') return;
+  const outcome = testOutcome(build);
+  const elapsed = Math.min(TEST_MS, now - testStart);
+  const progress = elapsed / TEST_MS;
+  const effective = outcome.sustained ? progress : Math.min(progress, 0.58);
+  const craft = document.querySelector<HTMLElement>('#test-craft');
+  const beam = document.querySelector<HTMLElement>('#scan-beam');
+  const caption = document.querySelector<HTMLElement>('#scene-caption');
+  const bar = document.querySelector<HTMLElement>('#test-progress-bar');
+  const stage = document.querySelector<HTMLElement>('#test-stage');
+  if (!craft || !beam || !caption || !bar || !stage) return;
+  const x = outcome.hover ? 29 + Math.sin(effective * Math.PI * 2) * 3 : 12 + effective * 80;
+  const y = outcome.hover ? 25 + effective * 42 : 27 + Math.sin(effective * Math.PI) * 8;
+  craft.style.left = `${x}%`; craft.style.top = `${y}%`;
+  craft.style.transform = outcome.hover ? `translate(-50%,-50%) rotate(${Math.sin(progress * 25) * 2}deg)` : 'translate(-50%,-50%) rotate(10deg)';
+  beam.style.left = `${x + (outcome.hover ? 6 : 0)}%`; beam.style.top = `${y + 8}%`;
+  beam.style.opacity = progress > 0.13 && progress < (outcome.sustained ? 0.91 : 0.58) ? '1' : '0';
+  bar.style.width = `${effective * 100}%`;
+  if (!outcome.sustained && progress >= 0.58) {
+    stage.classList.add('aborted');
+    caption.textContent = t('test.powerLoss');
+  } else if (progress < 0.13) caption.textContent = t('test.takingOff');
+  else caption.textContent = outcome.hover ? t('test.hovering') : t('test.sweeping');
+  const shouldCapture = Math.min(outcome.sustained ? 6 : 3, Math.floor(Math.max(0, effective - 0.14) / 0.12));
+  while (captured < shouldCapture) {
+    const cell = document.querySelector<HTMLElement>(`[data-cell="${captured}"]`);
+    if (cell) captureCell(cell, outcome);
+    captured++;
   }
-}
-
-function focusReadinessNext() {
-  app?.querySelector<HTMLElement>('[data-action="resolve"], [data-action="inspect"], [data-action="clear"]')?.focus();
+  if (progress < 1) { frameId = requestAnimationFrame(animateTest); return; }
+  if (testDone) return;
+  testDone = true; running = false;
+  build = recordTest(build); save();
+  if (outcome.success) scorm.complete(100, true);
+  const result = document.querySelector<HTMLElement>('#test-observation');
+  if (result) result.innerHTML = `<strong>${tx(outcome.success ? 'test.success' : 'test.needsWork')}</strong><span>${tx(outcome.hover ? 'test.platformGood' : 'test.platformBad')}</span><span>${tx(outcome.visual ? 'test.sensorGood' : 'test.sensorBad')}</span><span>${tx(outcome.sustained ? 'test.batteryGood' : 'test.batteryBad')}</span>`;
+  caption.textContent = t(outcome.success ? 'test.sceneSuccess' : 'test.sceneFailure');
+  document.querySelector<HTMLElement>('.return-button')?.focus();
 }
 
 app.addEventListener('click', (event) => {
-  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+  const target = event.target as HTMLElement;
+  const partButton = target.closest<HTMLButtonElement>('[data-part]');
+  if (partButton && phase === 'bench') {
+    const part = partButton.dataset.part as Part;
+    held = held === part ? null : part; inspection = false; hint = t(held ? 'bench.pickHint' : 'bench.defaultHint'); render(); return;
+  }
+  const slot = target.closest<HTMLButtonElement>('[data-slot]');
+  if (slot && phase === 'bench') {
+    const kind = slot.dataset.slot;
+    if (held && held.startsWith(`${kind}:`)) applyPart(held);
+    else if (kind === 'battery') { inspection = true; hint = ''; render(); }
+    else setHint(`bench.${kind}Hint`);
+    return;
+  }
+  const button = target.closest<HTMLButtonElement>('[data-action]');
   if (!button) return;
-  const action = button.dataset.action || '';
-  const id = button.dataset.id || '';
-  if (action === 'start' || action === 'replay') {
-    state = freshState();
-    state.phase = 'active';
-    persist(); render({ action: 'platform', id: platforms[0] });
-    return;
-  }
-  if (action === 'next' && state.phase === 'between') {
-    if (state.missionIndex === missions.length - 1) state.phase = 'results';
-    else { state.missionIndex++; state.phase = 'active'; }
-    state.notice = null;
-    persist();
-    if (state.phase === 'results') scorm.complete(totalScore(state.rounds), passed(state.rounds));
-    render();
-    if (state.phase === 'results') app?.querySelector<HTMLElement>('h1')?.focus();
-    return;
-  }
-  if (state.phase !== 'active') return;
-  const rule = missions[state.missionIndex];
-  const round = state.rounds[state.missionIndex];
-  if (action === 'platform' && platforms.includes(id as Platform)) {
-    round.platform = id as Platform;
-    state.notice = null;
-    persist(); render({ action, id });
-  } else if (action === 'sensor' && sensors.includes(id as Sensor)) {
-    round.sensor = id as Sensor;
-    state.notice = null;
-    persist(); render({ action, id });
-  } else if (action === 'inspect' && checks.includes(id as Check)) {
-    round.inspected[id as Check] = true;
-    state.notice = null;
-    persist(); render();
-    focusReadinessNext();
-  } else if (action === 'resolve' && id === rule.blocker && round.inspected[id as Check]) {
-    round.resolved[id as Check] = true;
-    state.notice = null;
-    persist(); render();
-    focusReadinessNext();
-  } else if (action === 'ignore' && id === rule.blocker && round.inspected[id as Check]) {
-    round.penalties.readiness = true;
-    state.notice = { key: 'feedback.ignored', issues: ['readiness'], good: false };
-    persist(); render({ action, id });
-  } else if (action === 'hold' || action === 'clear') {
-    const outcome = decide(rule, round, action);
-    state.rounds[state.missionIndex] = outcome.round;
-    const issues = outcome.evaluation.issues;
-    state.notice = { key: `feedback.${outcome.outcome}`, issues: outcome.outcome === 'incomplete' || outcome.outcome === 'cleared' ? [] : issues, good: outcome.outcome === 'held' || outcome.outcome === 'cleared' };
-    if (outcome.outcome === 'cleared') state.phase = 'between';
-    persist(); render(outcome.outcome === 'cleared' ? { action: 'next' } : { action });
-  }
+  const action = button.dataset.action;
+  if (action === 'return') { cancelAnimationFrame(frameId); running = false; phase = 'bench'; held = null; hint = t('bench.returned'); render(); return; }
+  if (phase !== 'bench') return;
+  if (action === 'rotate-left' || action === 'rotate-right') { build.angle += action === 'rotate-left' ? -30 : 30; save(); render(); }
+  if (action === 'remove-sensor' && build.sensor) { build = removeSensor(build); hint = t('bench.unmounted'); save(); render(); }
+  if (action === 'inspect-battery') { inspection = true; hint = ''; render(); }
+  if (action === 'test') startTest();
 });
-
+app.addEventListener('dragstart', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-part]');
+  if (!button) return;
+  held = button.dataset.part as Part;
+  event.dataTransfer?.setData('text/plain', held);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+});
+app.addEventListener('dragover', (event) => {
+  const slot = (event.target as HTMLElement).closest<HTMLElement>('[data-slot]');
+  if (slot && held?.startsWith(`${slot.dataset.slot}:`)) { event.preventDefault(); slot.classList.add('drag-over'); }
+});
+app.addEventListener('dragleave', (event) => (event.target as HTMLElement).closest<HTMLElement>('[data-slot]')?.classList.remove('drag-over'));
+app.addEventListener('drop', (event) => {
+  const slot = (event.target as HTMLElement).closest<HTMLElement>('[data-slot]');
+  const part = event.dataTransfer?.getData('text/plain') as Part;
+  if (slot && part?.startsWith(`${slot.dataset.slot}:`)) { event.preventDefault(); applyPart(part); }
+});
+app.addEventListener('dragend', () => { held = null; document.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over')); });
 render();
