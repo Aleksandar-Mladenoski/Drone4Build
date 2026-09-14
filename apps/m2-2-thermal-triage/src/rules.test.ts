@@ -1,92 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CASE_IDS, OBSERVATIONS, advance, assessCase, assessPriority, newGame, passed, restoreGame, score, type GameState } from './rules.ts';
+import { canFile, capture, evidenceStrength, newGame, regionAt, restoreGame } from './rules.ts';
 
-function selectCorrect(state: GameState) {
-  const observation = OBSERVATIONS[state.index];
-  state.cases[observation.id].selected = { ...observation.correct };
-}
+test('scene capture records the same world position and the active viewpoint', () => {
+  const state = newGame(); state.phase = 'investigate';
+  state.reticle = { x: 852, y: 450 }; state.viewpoint = -1;
+  assert.equal(regionAt(852, 450), 'band');
+  assert.deepEqual(capture(state), { id: 1, x: 852, y: 450, viewpoint: -1, region: 'band', decision: 'unfiled' });
+  state.mode = 'thermal';
+  assert.deepEqual(state.reticle, { x: 852, y: 450 });
+});
 
-function solveAllCases(state: GameState) {
-  state.phase = 'case';
-  for (const id of CASE_IDS) {
-    assert.equal(CASE_IDS[state.index], id);
-    selectCorrect(state);
-    assert.equal(assessCase(state).solved, true);
-    advance(state);
+test('repeatable pattern and changing glass observation strengthen a filed investigation', () => {
+  const state = newGame(); state.phase = 'investigate';
+  for (const [x, y, viewpoint, decision] of [[850, 450, -1, 'retain'], [850, 450, 1, 'retain'], [1200, 420, 0, 'reject'], [1200, 420, 1, 'reject']] as const) {
+    state.reticle = { x, y }; state.viewpoint = viewpoint;
+    capture(state)!.decision = decision;
   }
-  assert.equal(state.phase, 'priority');
-}
-
-test('all four evidence classifications and validation actions yield a full-score pass', () => {
-  const state = newGame();
-  solveAllCases(state);
-  state.priority.selected = { case: 'facade', reason: 'repeatable' };
-  assert.equal(assessPriority(state).solved, true);
-  assert.equal(score(state), 100);
-  assert.equal(passed(state), true);
+  assert.equal(canFile(state), true);
+  assert.deepEqual(evidenceStrength(state), { repeatable: true, reflectionChecked: true, score: 90 });
+  assert.deepEqual(restoreGame(JSON.parse(JSON.stringify(state))), state);
 });
 
-test('environmental artefact must be classified using survey context', () => {
-  const state = newGame();
-  state.phase = 'case'; state.index = 1;
-  state.cases.solar.selected = { focus: 'sunlitPanel', status: 'investigate', validation: 'conditions' };
-  const first = assessCase(state);
-  assert.deepEqual(first.wrong, ['status']);
-  assert.equal(state.cases.solar.solved, false);
-  state.cases.solar.selected.status = 'environment';
-  assert.equal(assessCase(state).solved, true);
-  assert.equal(score(state), 16);
-});
-
-test('claiming thermography proves moisture cannot clear the observation', () => {
-  const state = newGame();
-  state.phase = 'case'; state.index = 2;
-  state.cases.moisture.selected = { focus: 'lowerPatch', status: 'moistureProof', validation: 'none' };
-  assert.deepEqual(assessCase(state).wrong, ['status', 'validation']);
-  advance(state);
-  assert.equal(state.index, 2);
-  state.cases.moisture.selected.status = 'possible';
-  state.cases.moisture.selected.validation = 'moisture';
-  assert.equal(assessCase(state).solved, true);
-});
-
-test('a dramatic-looking observation is not the supported final priority', () => {
-  const state = newGame();
-  solveAllCases(state);
-  state.priority.selected = { case: 'solar', reason: 'dramatic' };
-  assert.deepEqual(assessPriority(state).wrong, ['case', 'reason']);
-  assert.equal(state.phase, 'priority');
-  state.priority.selected = { case: 'facade', reason: 'repeatable' };
-  assert.equal(assessPriority(state).solved, true);
-  assert.equal(score(state), 90);
-  assert.equal(passed(state), true);
-});
-
-test('retries deduct only the affected decisions and can produce a below-threshold result', () => {
-  const state = newGame();
-  state.phase = 'case';
-  for (let index = 0; index < 4; index++) {
-    const observation = OBSERVATIONS[index];
-    const progress = state.cases[observation.id];
-    progress.selected = { focus: observation.correct.focus, status: 'confirmed', validation: 'none' };
-    assert.deepEqual(assessCase(state).wrong, ['status', 'validation']);
-    selectCorrect(state);
-    assert.equal(assessCase(state).solved, true);
-    advance(state);
-  }
-  state.priority.selected = { case: 'facade', reason: 'repeatable' };
-  assert.equal(assessPriority(state).solved, true);
-  assert.equal(score(state), 68);
-  assert.equal(passed(state), false);
-});
-
-test('resume accepts a serialised checkpoint and rejects invalid data', () => {
-  const state = newGame();
-  state.phase = 'case';
-  state.cases.facade.selected.focus = 'verticalBand';
-  const copy = restoreGame(JSON.parse(JSON.stringify(state)));
-  assert.deepEqual(copy, state);
-  assert.equal(restoreGame({ ...state, index: 9 }), null);
-  assert.equal(restoreGame({ ...state, cases: { ...state.cases, facade: { ...state.cases.facade, selected: { ...state.cases.facade.selected, focus: 'unknown' } } } }), null);
+test('one dramatic retained glass view does not become strong evidence', () => {
+  const state = newGame(); state.phase = 'investigate';
+  state.reticle = { x: 1200, y: 420 };
+  capture(state)!.decision = 'retain';
+  assert.equal(canFile(state), false);
+  assert.equal(evidenceStrength(state).score, 0);
+  assert.equal(restoreGame({ ...state, zoom: 9 }), null);
 });

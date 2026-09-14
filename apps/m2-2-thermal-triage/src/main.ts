@@ -1,147 +1,57 @@
 import '../../../packages/core/src/ui.css';
 import './style.css';
 import { createScorm } from '../../../packages/core/src/scorm.ts';
-import { createTranslator } from '../../../packages/core/src/locale.ts';
-import en from '../locales/en.json';
-import {
-  CASE_IDS, OBSERVATIONS, REASON_IDS,
-  advance, assessCase, assessPriority, newGame, passed, restoreGame, score,
-  type CaseId, type Field, type GameState, type PriorityField, type ReasonId,
-  type StatusId, type ValidationId
-} from './rules.ts';
+import { canFile, capture, evidenceStrength, newGame, restoreGame, type Decision, type GameState, type ViewMode } from './rules.ts';
+import { constrainCamera, drawCapture, drawViewport, screenToWorld } from './scene.ts';
 
-const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
-  .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]));
-const { t, locale } = createTranslator(en, dictionaries);
 const scorm = createScorm('m2-2-thermal-triage');
 let state: GameState = restoreGame(scorm.load<GameState>()) ?? newGame();
-const app = document.querySelector<HTMLDivElement>('#app');
-if (!app) throw new Error('Missing game mount');
-document.documentElement.lang = locale;
-document.title = t('app.title');
+const app = document.querySelector<HTMLDivElement>('#app')!;
+let drag: { x: number; y: number; cameraX: number; cameraY: number; moved: boolean } | null = null;
+document.title = 'Drone4Build · Thermal Investigator';
+const save = () => scorm.save(state);
 
-type Feedback = { kind: 'missing' | 'wrong' | 'correct'; fields?: (Field | PriorityField)[] } | null;
-let feedback: Feedback = null;
-
-function h(value: string | number): string {
-  return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+function header() {
+  return `<header class="game-header"><div><div class="eyebrow">DRONE4BUILD · M2.2</div><strong>◈ Thermal Investigator</strong></div><span class="mode-pill">${scorm.snapshot().mode === 'mock' ? 'Standalone / SCORM mock' : 'Connected to LMS'}</span></header>`;
 }
-
-function save(): void { scorm.save(state); }
-
-function header(): string {
-  const fraction = state.phase === 'intro' ? 0 : state.phase === 'case' ? state.index + 1 : 5;
-  const snapshot = scorm.snapshot();
-  return `<header class="app-header">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><div class="eyebrow">${h(t('app.course'))}</div><div class="brand-title">${h(t('app.title'))}</div></div></div>
-    <div class="header-meta"><span class="connection">${h(t(snapshot.mode === 'mock' ? 'app.mock' : 'app.lms'))}</span><span>${h(t('app.score', { score: score(state) }))}</span></div>
-    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="5" aria-valuenow="${fraction}" aria-label="${h(t('app.progress', { current: Math.min(fraction, 4), total: 4 }))}"><span style="width:${fraction * 20}%"></span></div>
-  </header>`;
+function intro() {
+  return `<main class="intro panel"><div class="intro-visual"><span class="thermal-glow"></span><span class="viewfinder">+</span></div><div class="intro-copy"><div class="eyebrow">M2.2 · EVIDENCE LAB</div><h1>Investigate the façade</h1><p>Explore a building through visible and thermal imagery. Capture candidate evidence from different viewpoints, then decide what belongs in the case file.</p><div class="intro-goals"><span>01 Explore the wall</span><span>02 Capture and classify</span><span>03 File the evidence</span></div><button class="primary" data-action="start">Start investigation →</button></div></main>`;
 }
-
-function intro(): string {
-  return `<main class="intro-layout">
-    <section class="intro-copy panel"><p class="eyebrow">${h(t('intro.eyebrow'))}</p><h1>${h(t('intro.title'))}</h1><p>${h(t('intro.body'))}</p><div class="goal-callout">${h(t('intro.goal'))}</div><div class="actions"><button class="btn-primary" data-action="start">${h(t('intro.start'))} <span aria-hidden="true">→</span></button></div></section>
-    <aside class="intro-visual panel"><div class="folio-stack" aria-hidden="true"><div class="folio folio-4"></div><div class="folio folio-3"></div><div class="folio folio-2"></div><div class="folio folio-1"><span>${h(t('intro.folioTop'))}</span><strong>04</strong><span>${h(t('intro.folioBottom'))}</span></div></div><p>${h(t('intro.note'))}</p></aside>
-  </main>`;
+const regionName: Record<string,string> = { band:'Wall seam', glass:'Glazed bay', solar:'Solar strip', lowerWall:'Lower wall', context:'Context' };
+function evidence() {
+  return `<div class="evidence-list">${state.captures.length ? state.captures.map(item => `<article class="evidence-card ${item.decision}"><canvas data-capture="${item.id}" aria-label="Evidence capture ${item.id}"></canvas><div class="evidence-meta"><strong>#${item.id} · ${regionName[item.region]}</strong><span>Viewpoint ${item.viewpoint+2}</span></div><div class="decision-row"><button data-id="${item.id}" data-decision="retain" class="${item.decision === 'retain' ? 'selected' : ''}">Retain</button><button data-id="${item.id}" data-decision="reject" class="${item.decision === 'reject' ? 'selected' : ''}">Reject</button></div></article>`).join('') : '<p class="empty-evidence">No captures yet. Aim at a feature and capture it.</p>'}</div>`;
 }
-
-function focusButtons(id: CaseId): string {
-  const observation = OBSERVATIONS.find(item => item.id === id)!;
-  const selected = state.cases[id].selected.focus;
-  return observation.focus.map((focus, index) => `<button type="button" class="hotspot hotspot-${h(focus)} ${selected === focus ? 'selected' : ''}" data-action="focus" data-value="${h(focus)}" aria-pressed="${selected === focus}" aria-label="${h(t(`case.${id}.focus.${focus}`))}" ${state.cases[id].solved ? 'disabled' : ''}><span class="hotspot-label">${index + 1} · ${h(t(`case.${id}.focus.${focus}`))}</span></button>`).join('');
+function investigation() {
+  return `<main class="game-layout"><section class="viewport-panel"><div class="toolbar"><div><div class="eyebrow">LIVE CAMERA SURVEY</div><h1>Explore the wall</h1></div><div class="view-switch" role="group" aria-label="Imaging mode">${(['rgb','thermal','split'] as ViewMode[]).map(mode => `<button data-mode="${mode}" class="${state.mode === mode ? 'active' : ''}">${mode === 'rgb' ? 'RGB' : mode === 'thermal' ? 'Thermal' : 'Split'}</button>`).join('')}</div></div><div class="canvas-wrap"><canvas id="scene" aria-label="Interactive façade camera. Click to aim; drag to pan."></canvas><div class="scene-tag">${state.mode.toUpperCase()} · Viewpoint ${state.viewpoint+2} / 3</div><div class="reticle-hint">Click to aim · drag to pan · scroll to zoom</div></div><div class="flight-controls"><div class="control-group"><span>Viewpoint</span><button data-action="view-left" aria-label="Move viewpoint left">◀</button><strong>${state.viewpoint+2} / 3</strong><button data-action="view-right" aria-label="Move viewpoint right">▶</button></div><div class="control-group"><span>Zoom</span><button data-action="zoom-out">−</button><strong>${state.zoom.toFixed(1)}×</strong><button data-action="zoom-in">+</button></div><button class="capture-button" data-action="capture" ${state.captures.length >= 8 ? 'disabled' : ''}>◉ Capture at reticle</button></div><div class="field-note">A bright thermal response can be a material pattern or a reflection. Check whether it persists when your viewpoint changes. This simulation does not diagnose a defect.</div></section><aside class="review-panel"><div class="review-heading"><div><div class="eyebrow">CASE FILE</div><h2>Captured evidence</h2></div><span>${state.captures.length}/8</span></div>${evidence()}<div class="file-row"><p>Classify at least three captures from two viewpoints before filing.</p><button class="primary" data-action="file" ${canFile(state) ? '' : 'disabled'}>File evidence →</button></div></aside></main>`;
 }
-
-function choices<T extends string>(ids: readonly T[], prefix: string, action: string, selected: string | null): string {
-  return ids.map(id => `<button type="button" class="choice choice-card ${selected === id ? 'selected' : ''}" aria-pressed="${selected === id}" data-action="${h(action)}" data-value="${h(id)}"><span class="choice-check" aria-hidden="true">${selected === id ? '✓' : '○'}</span><span>${h(t(`${prefix}.${id}`))}</span></button>`).join('');
+function report() {
+  const result=evidenceStrength(state);
+  return `<main class="report panel"><div class="eyebrow">EVIDENCE REPORT</div><h1>What did the survey show?</h1><p>The grade reflects repeatability and whether a likely reflection was checked. Thermal color alone is not a defect diagnosis.</p><div class="report-score"><strong>${result.score}%</strong><span>${result.score >= 70 ? 'Evidence ready for review' : 'More investigation recommended'}</span></div><div class="report-findings"><div class="${result.repeatable ? 'confirmed' : ''}"><strong>Persistent wall seam</strong><p>${result.repeatable ? 'Retained captures at different viewpoints support a repeatable thermal pattern.' : 'Capture and retain this seam from two viewpoints to test repeatability.'}</p></div><div class="${result.reflectionChecked ? 'confirmed' : ''}"><strong>Glazed bay reflection</strong><p>${result.reflectionChecked ? 'The changed appearance was checked from different viewpoints and excluded from the case file.' : 'Inspect the glazing from another viewpoint before interpreting its bright response.'}</p></div></div><div class="report-actions"><button data-action="back">Review captures</button><button class="primary" data-action="restart">New investigation</button></div></main>`;
 }
-
-function caseFeedback(): string {
-  if (!feedback) return '';
-  const id = CASE_IDS[state.index];
-  if (feedback.kind === 'missing') return `<div class="feedback" role="status">${h(t('case.missing'))}</div>`;
-  if (feedback.kind === 'correct') return `<div class="feedback good" role="status"><strong>${h(t('case.ready'))}</strong><p>${h(t(`case.${id}.feedback`))}</p></div>`;
-  return `<div class="feedback" role="status"><strong>${h(t('case.wrong'))}</strong><p>${h(t(`case.${id}.hint`))}</p><ul>${(feedback.fields ?? []).map(field => `<li>${h(t(`case.feedback.${field}`))}</li>`).join('')}</ul></div>`;
+function paint() {
+  const canvas=document.querySelector<HTMLCanvasElement>('#scene'); if(canvas) drawViewport(canvas,state);
+  document.querySelectorAll<HTMLCanvasElement>('[data-capture]').forEach(node => { const item=state.captures.find(entry=>entry.id===Number(node.dataset.capture)); if(item) drawCapture(node,item,'thermal'); });
 }
-
-function caseView(): string {
-  const id = CASE_IDS[state.index];
-  const observation = OBSERVATIONS[state.index];
-  const progress = state.cases[id];
-  const n = state.index + 1;
-  return `<main class="case-layout">
-    <div class="case-heading"><div><p class="eyebrow">${h(t('case.eyebrow'))} / ${h(t('app.progress', { current: n, total: 4 }))}</p><h1>${h(t(`case.${id}.title`))}</h1><p class="muted">${h(t(`case.${id}.summary`))}</p></div><div class="case-number" aria-hidden="true">0${n}</div></div>
-    <section class="evidence-grid" aria-label="${h(t('case.eyebrow'))}">
-      <div class="image-card thermal-card"><div class="image-header"><span class="image-symbol" aria-hidden="true">◐</span>${h(t('case.thermal'))}</div><div class="image-stage stage-${h(id)}"><img src="./assets/${h(id)}-thermal.svg" alt="${h(t('case.thermalAlt', { number: n, description: t(`case.${id}.altThermal`) }))}" />${focusButtons(id)}</div><p>${h(t(`case.${id}.thermal`))}</p></div>
-      <div class="image-card"><div class="image-header"><span class="image-symbol" aria-hidden="true">▧</span>${h(t('case.rgb'))}</div><div class="image-stage"><img src="./assets/${h(id)}-rgb.svg" alt="${h(t('case.rgbAlt', { number: n, description: t(`case.${id}.altRgb`) }))}" /></div><p>${h(t(`case.${id}.visual`))}</p></div>
-    </section>
-    <div class="desk-layout"><section class="evidence-notes panel"><p class="eyebrow">${h(t('app.subtitle'))}</p><dl><div><dt>${h(t('case.note.thermal'))}</dt><dd>${h(t(`case.${id}.thermal`))}</dd></div><div><dt>${h(t('case.note.visual'))}</dt><dd>${h(t(`case.${id}.visual`))}</dd></div><div><dt>${h(t('case.note.survey'))}</dt><dd>${h(t(`case.${id}.survey`))}</dd></div></dl><div class="legend"><span aria-hidden="true" class="thermal-gradient"></span>${h(t('app.legend'))}</div></section>
-      <section class="judgement panel"><h2>${h(t('case.mark'))}</h2><p class="muted compact">${progress.selected.focus ? h(t(`case.${id}.focus.${progress.selected.focus}`)) : '—'}</p><h2>${h(t('case.classify'))}</h2><div class="choice-grid">${choices(observation.statusChoices, 'case.status', 'status', progress.selected.status)}</div><h2>${h(t('case.validate'))}</h2><div class="choice-grid">${choices(observation.validationChoices, 'case.validation', 'validation', progress.selected.validation)}</div>${caseFeedback()}<div class="actions">${progress.solved ? `<button class="btn-primary" data-action="next">${h(t(state.index === 3 ? 'case.toPriority' : 'case.next'))} <span aria-hidden="true">→</span></button>` : `<button class="btn-primary" data-action="submit-case">${h(t('case.submit'))}</button>`}</div></section></div>
-  </main>`;
-}
-
-function priorityFeedback(): string {
-  if (!feedback) return '';
-  if (feedback.kind === 'missing') return `<div class="feedback" role="status">${h(t('priority.missing'))}</div>`;
-  if (feedback.kind === 'wrong') return `<div class="feedback" role="status"><strong>${h(t('priority.wrong'))}</strong><ul>${(feedback.fields ?? []).map(field => `<li>${h(t(`priority.feedback.${field}`))}</li>`).join('')}</ul></div>`;
-  return '';
-}
-
-function priority(): string {
-  return `<main class="priority-layout"><div class="case-heading"><div><p class="eyebrow">${h(t('priority.eyebrow'))}</p><h1>${h(t('priority.title'))}</h1><p class="muted">${h(t('priority.body'))}</p></div><div class="case-number" aria-hidden="true">05</div></div>
-    <section class="priority-board panel"><h2>${h(t('priority.choose'))}</h2><div class="priority-cases">${CASE_IDS.map(id => `<button type="button" class="priority-card choice ${state.priority.selected.case === id ? 'selected' : ''}" data-action="priority-case" data-value="${id}" aria-pressed="${state.priority.selected.case === id}"><img src="./assets/${id}-thermal.svg" alt="" /><span>${h(t(`case.${id}.title`))}</span><small>${h(t(`case.${id}.summary`))}</small></button>`).join('')}</div><h2>${h(t('priority.reason'))}</h2><div class="reason-grid">${choices(REASON_IDS, 'priority.reason', 'priority-reason', state.priority.selected.reason)}</div>${priorityFeedback()}<div class="actions"><button class="btn-primary" data-action="submit-priority">${h(t('priority.submit'))}</button></div></section>
-  </main>`;
-}
-
-function result(): string {
-  const success = passed(state);
-  const snapshot = scorm.snapshot();
-  return `<main class="result-layout"><section class="result-card panel"><p class="eyebrow">${h(t('result.eyebrow'))}</p><div class="result-mark" aria-hidden="true">${success ? '✓' : '↻'}</div><h1>${h(t(success ? 'result.passed' : 'result.failed'))}</h1><p class="result-score">${h(t('result.score', { score: score(state) }))}</p><p>${h(t(success ? 'result.passDetail' : 'result.failDetail'))}</p><div class="takeaway">${h(t('result.takeaway'))}</div><p class="muted">${h(t('result.status', { status: t(`app.status.${snapshot.status}`) }))}</p><div class="actions"><button class="btn-primary" data-action="replay">${h(t('result.replay'))}</button><button data-action="finish">${h(t('result.exit'))}</button></div></section></main>`;
-}
-
-function render(focusSelector?: string): void {
-  app!.innerHTML = `<div class="thermal-app shell">${header()}${state.phase === 'intro' ? intro() : state.phase === 'case' ? caseView() : state.phase === 'priority' ? priority() : result()}</div>`;
-  if (focusSelector) app!.querySelector<HTMLElement>(focusSelector)?.focus();
-}
-
-app.addEventListener('click', event => {
-  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-action]');
-  if (!button) return;
-  const action = button.dataset.action;
-  const value = button.dataset.value;
-  feedback = null;
-  if (action === 'start') {
-    state.phase = 'case'; save(); render('[data-action="focus"]'); return;
-  }
-  if (state.phase === 'case') {
-    const progress = state.cases[CASE_IDS[state.index]];
-    if (action === 'focus' && value && !progress.solved) progress.selected.focus = value;
-    else if (action === 'status' && value && !progress.solved) progress.selected.status = value as StatusId;
-    else if (action === 'validation' && value && !progress.solved) progress.selected.validation = value as ValidationId;
-    else if (action === 'submit-case') {
-      const assessment = assessCase(state);
-      feedback = { kind: assessment.missing.length ? 'missing' : assessment.wrong.length ? 'wrong' : 'correct', fields: assessment.wrong };
-    } else if (action === 'next') {
-      advance(state);
-    } else return;
-    save(); render(action === 'next' ? undefined : action === 'submit-case' && progress.solved ? '[data-action="next"]' : `[data-action="${action}"]${value ? `[data-value="${value}"]` : ''}`); return;
-  }
-  if (state.phase === 'priority') {
-    if (action === 'priority-case' && value) state.priority.selected.case = value as CaseId;
-    else if (action === 'priority-reason' && value) state.priority.selected.reason = value as ReasonId;
-    else if (action === 'submit-priority') {
-      const assessment = assessPriority(state);
-      if (assessment.solved) scorm.complete(score(state), passed(state));
-      else feedback = { kind: assessment.missing.length ? 'missing' : 'wrong', fields: assessment.wrong };
-    } else return;
-    save(); render(state.priority.solved ? undefined : `[data-action="${action}"]${value ? `[data-value="${value}"]` : ''}`); return;
-  }
-  if (state.phase === 'result' && action === 'replay') {
-    state = newGame();
-    if (scorm.snapshot().status !== 'passed') { scorm.set('cmi.core.lesson_status', 'incomplete'); scorm.commit(); }
-    save(); render('[data-action="start"]'); return;
-  }
-  if (state.phase === 'result' && action === 'finish') { scorm.finish(); button.disabled = true; }
+function render() { app.innerHTML=`<div class="thermal-shell">${header()}${state.phase==='intro'?intro():state.phase==='report'?report():investigation()}</div>`; paint(); }
+function updateZoom(next:number) { state.zoom=Math.max(1,Math.min(3,Math.round(next*10)/10)); save(); render(); }
+app.addEventListener('click', event=>{
+  const target=event.target as HTMLElement;
+  const mode=target.closest<HTMLButtonElement>('[data-mode]')?.dataset.mode as ViewMode|undefined;
+  if(mode){state.mode=mode;save();render();return;}
+  const decisionButton=target.closest<HTMLButtonElement>('[data-decision]');
+  if(decisionButton){const item=state.captures.find(entry=>entry.id===Number(decisionButton.dataset.id));if(item){item.decision=decisionButton.dataset.decision as Decision;save();render();}return;}
+  const action=target.closest<HTMLButtonElement>('[data-action]')?.dataset.action;if(!action)return;
+  if(action==='start'){state.phase='investigate';save();render();}
+  else if(action==='view-left'||action==='view-right'){state.viewpoint=Math.max(-1,Math.min(1,state.viewpoint+(action==='view-left'?-1:1))) as -1|0|1;save();render();}
+  else if(action==='zoom-in'||action==='zoom-out')updateZoom(state.zoom+(action==='zoom-in'?.25:-.25));
+  else if(action==='capture'){capture(state);save();render();}
+  else if(action==='file'&&canFile(state)){state.phase='report';const result=evidenceStrength(state);scorm.complete(result.score,result.score>=70);save();render();}
+  else if(action==='back'){state.phase='investigate';save();render();}
+  else if(action==='restart'){state=newGame();save();render();}
 });
-
+app.addEventListener('pointerdown',event=>{const canvas=(event.target as HTMLElement).closest<HTMLCanvasElement>('#scene');if(!canvas)return;drag={x:event.clientX,y:event.clientY,cameraX:state.camera.x,cameraY:state.camera.y,moved:false};canvas.setPointerCapture(event.pointerId);});
+app.addEventListener('pointermove',event=>{const canvas=document.querySelector<HTMLCanvasElement>('#scene');if(!drag||!canvas)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(Math.hypot(dx,dy)>4)drag.moved=true;if(!drag.moved)return;const r=canvas.getBoundingClientRect();const unit=screenToWorld(state,r.width,r.height,r.width+1,r.height).x-screenToWorld(state,r.width,r.height,r.width,r.height).x;state.camera.x=drag.cameraX-dx*unit;state.camera.y=drag.cameraY-dy*unit;constrainCamera(state);paint();});
+app.addEventListener('pointerup',event=>{const canvas=document.querySelector<HTMLCanvasElement>('#scene');if(!drag||!canvas)return;if(!drag.moved){const r=canvas.getBoundingClientRect();state.reticle=screenToWorld(state,r.width,r.height,event.clientX-r.left,event.clientY-r.top);constrainCamera(state);}drag=null;save();paint();});
+app.addEventListener('wheel',event=>{if(!(event.target as HTMLElement).closest('#scene'))return;event.preventDefault();updateZoom(state.zoom+(event.deltaY<0?.2:-.2));},{passive:false});
+window.addEventListener('resize',paint);
 render();
