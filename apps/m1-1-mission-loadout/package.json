@@ -1,0 +1,10 @@
+{
+  "name": "@drone4build/m1-1-mission-loadout",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "test": "node --experimental-strip-types --test src/rules.test.ts"
+  }
+}
