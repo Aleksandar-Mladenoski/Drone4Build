@@ -11,7 +11,7 @@ const dictionaries = Object.fromEntries(
 );
 const { t, locale } = createTranslator(en, dictionaries);
 const scorm = createScorm('m3-2-digital-handover');
-const app = document.querySelector<HTMLDivElement>('#app');
+const app = document.querySelector<HTMLDivElement>('#app')!;
 if (!app) throw new Error('Missing app root');
 document.documentElement.lang = locale;
 document.title = `Drone4Build — ${t('app.title')}`;

@@ -10,7 +10,9 @@ import {
   type StatusId, type ValidationId
 } from './rules.ts';
 
-const { t, locale } = createTranslator(en);
+const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
+  .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]));
+const { t, locale } = createTranslator(en, dictionaries);
 const scorm = createScorm('m2-2-thermal-triage');
 let state: GameState = restoreGame(scorm.load<GameState>()) ?? newGame();
 const app = document.querySelector<HTMLDivElement>('#app');

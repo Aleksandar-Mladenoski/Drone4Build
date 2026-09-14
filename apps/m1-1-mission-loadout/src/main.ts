@@ -10,7 +10,9 @@ type Notice = { key: string; issues: ('platform' | 'sensor' | 'readiness')[]; go
 type AppState = { phase: Phase; missionIndex: number; rounds: RoundState[]; notice: Notice };
 
 const scorm = createScorm('m1-1-mission-loadout');
-const translator = createTranslator(en);
+const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
+  .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]));
+const translator = createTranslator(en, dictionaries);
 const t = translator.t;
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root unavailable');
