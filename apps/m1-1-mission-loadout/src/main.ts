@@ -110,6 +110,10 @@ function render(focus?: { action: string; id?: string }) {
   }
 }
 
+function focusReadinessNext() {
+  app?.querySelector<HTMLElement>('[data-action="resolve"], [data-action="inspect"], [data-action="clear"]')?.focus();
+}
+
 app.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
   if (!button) return;
@@ -146,11 +150,12 @@ app.addEventListener('click', (event) => {
     round.inspected[id as Check] = true;
     state.notice = null;
     persist(); render();
-    app?.querySelector<HTMLElement>(`[data-action="resolve"][data-id="${id}"]`)?.focus();
+    focusReadinessNext();
   } else if (action === 'resolve' && id === rule.blocker && round.inspected[id as Check]) {
     round.resolved[id as Check] = true;
     state.notice = null;
     persist(); render();
+    focusReadinessNext();
   } else if (action === 'ignore' && id === rule.blocker && round.inspected[id as Check]) {
     round.penalties.readiness = true;
     state.notice = { key: 'feedback.ignored', issues: ['readiness'], good: false };
