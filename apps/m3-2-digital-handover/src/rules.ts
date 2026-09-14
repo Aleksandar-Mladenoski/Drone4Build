@@ -1,135 +1,52 @@
-export const GATES = ['verify', 'integrate', 'compare', 'release'] as const;
-export type Gate = typeof GATES[number];
-export type Mode = 'intro' | 'active' | 'result';
+export type Phase = 'intro' | 'register' | 'compare' | 'solved';
+export type Point = { x: number; y: number };
+export type Transform = { dx: number; dy: number; angle: number };
+export type GameState = { version: 2; phase: Phase; transform: Transform; opacity: number; clip: number; falseMarks: number; lastMark: Point | null; feedback: string | null };
 
-export interface GameState {
-  version: 1;
-  mode: Mode;
-  gate: number;
-  errors: [number, number, number, number];
-  completed: [boolean, boolean, boolean, boolean];
-  selection: string | null;
-  feedback: string | null;
-  released: boolean;
+export const CENTER: Point = { x: 470, y: 330 };
+export const ANCHORS: Point[] = [{ x: 220, y: 180 }, { x: 610, y: 180 }, { x: 720, y: 475 }];
+export const PLANNED_OPENING = { x: 333, y: 390, width: 72, height: 58 };
+export const EXISTING_OPENING = { x: 422, y: 390, width: 72, height: 58 };
+export const INITIAL_TRANSFORM: Transform = { dx: 88, dy: -46, angle: 11 };
+
+export function fresh(): GameState {
+  return { version: 2, phase: 'intro', transform: { ...INITIAL_TRANSFORM }, opacity: .88, clip: 100, falseMarks: 0, lastMark: null, feedback: null };
 }
 
-const ANSWERS: Record<Gate, string> = {
-  verify: 'reference-mismatch',
-  integrate: 'align-documented',
-  compare: 'opening-shift',
-  release: 'approved-current',
-};
-
-const WRONG_FEEDBACK: Record<Gate, Record<string, string>> = {
-  verify: {
-    'ready-to-compare': 'feedback.verify.ready',
-    'units-problem': 'feedback.verify.units',
-    'reference-mismatch': 'feedback.verify.correct',
-  },
-  integrate: {
-    'visual-drag': 'feedback.integrate.drag',
-    'compare-as-is': 'feedback.integrate.asis',
-    'align-documented': 'feedback.integrate.correct',
-  },
-  compare: {
-    'point-density': 'feedback.compare.density',
-    'line-style': 'feedback.compare.style',
-    'opening-shift': 'feedback.compare.correct',
-  },
-  release: {
-    'approved-old': 'feedback.release.old',
-    'draft-new': 'feedback.release.draft',
-    'qa-failed': 'feedback.release.qa',
-    'approved-current': 'feedback.release.correct',
-  },
-};
-
-export function initialState(): GameState {
-  return {
-    version: 1,
-    mode: 'intro',
-    gate: 0,
-    errors: [0, 0, 0, 0],
-    completed: [false, false, false, false],
-    selection: null,
-    feedback: null,
-    released: false,
-  };
+export function transformPoint(p: Point, transform: Transform): Point {
+  const radians = transform.angle * Math.PI / 180;
+  const x = p.x - CENTER.x, y = p.y - CENTER.y;
+  return { x: CENTER.x + x * Math.cos(radians) - y * Math.sin(radians) + transform.dx,
+    y: CENTER.y + x * Math.sin(radians) + y * Math.cos(radians) + transform.dy };
 }
 
-export function start(state: GameState): GameState {
-  if (state.mode !== 'intro') return state;
-  return { ...state, mode: 'active', feedback: null };
+export function anchorErrors(transform: Transform): number[] {
+  return ANCHORS.map(anchor => {
+    const moved = transformPoint(anchor, transform);
+    return Math.hypot(moved.x - anchor.x, moved.y - anchor.y);
+  });
 }
 
-export function score(state: GameState): number {
-  return state.completed.reduce<number>((sum, done, index) =>
-    sum + (done ? Math.max(10, 25 - state.errors[index] * 5) : 0), 0);
+export function canRegister(transform: Transform): boolean {
+  const errors = anchorErrors(transform);
+  return Math.max(...errors) < 24 && errors.reduce((a, b) => a + b, 0) / errors.length < 17;
 }
 
-export function passed(state: GameState): boolean {
-  return state.mode === 'result' && state.released && score(state) >= 75;
+export function isRealDiscrepancy(p: Point): boolean {
+  return p.x >= EXISTING_OPENING.x - 15 && p.x <= EXISTING_OPENING.x + EXISTING_OPENING.width + 15 &&
+    p.y >= EXISTING_OPENING.y - 15 && p.y <= EXISTING_OPENING.y + EXISTING_OPENING.height + 15;
 }
 
-export function select(state: GameState, choice: string): GameState {
-  if (state.mode !== 'active') return state;
-  return { ...state, selection: choice, feedback: null };
+export function tryInspect(state: GameState, point: Point): GameState {
+  if (state.phase !== 'compare') return state;
+  if (isRealDiscrepancy(point)) return { ...state, phase: 'solved', lastMark: point, feedback: 'feedback.found' };
+  return { ...state, falseMarks: state.falseMarks + 1, lastMark: point, feedback: 'feedback.false' };
 }
 
-export function submit(state: GameState): GameState {
-  if (state.mode !== 'active' || !state.selection) return state;
-  const gate = GATES[state.gate];
-  if (!gate) return state;
-
-  const choice = state.selection;
-  if (choice !== ANSWERS[gate]) {
-    const errors = [...state.errors] as GameState['errors'];
-    errors[state.gate] += 1;
-    return {
-      ...state,
-      errors,
-      selection: null,
-      feedback: WRONG_FEEDBACK[gate][choice] ?? `feedback.${gate}.tryAgain`,
-    };
-  }
-
-  const completed = [...state.completed] as GameState['completed'];
-  completed[state.gate] = true;
-  const isFinal = state.gate === GATES.length - 1;
-  return {
-    ...state,
-    completed,
-    mode: isFinal ? 'result' : 'active',
-    gate: isFinal ? state.gate : state.gate + 1,
-    selection: null,
-    feedback: WRONG_FEEDBACK[gate][choice],
-    released: isFinal,
-  };
-}
-
-export function restore(raw: unknown): GameState | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const value = raw as Partial<GameState>;
-  if (value.version !== 1 || !['intro', 'active', 'result'].includes(value.mode ?? '') ||
-      !Number.isInteger(value.gate) || (value.gate ?? -1) < 0 || (value.gate ?? 4) > 3 ||
-      !Array.isArray(value.errors) || value.errors.length !== 4 ||
-      !value.errors.every(n => Number.isInteger(n) && n >= 0 && n <= 100) ||
-      !Array.isArray(value.completed) || value.completed.length !== 4 ||
-      !value.completed.every(n => typeof n === 'boolean') ||
-      typeof value.released !== 'boolean') return null;
-  const gate = value.gate as number;
-  const completed = value.completed as GameState['completed'];
-  if (completed.some((done, index) => done !== (value.mode === 'result' || index < gate))) return null;
-  if (value.mode === 'result' && (!value.released || gate !== 3)) return null;
-  if (value.mode !== 'result' && value.released) return null;
-  return {
-    version: 1,
-    mode: value.mode as Mode,
-    gate,
-    errors: value.errors as GameState['errors'],
-    completed,
-    selection: typeof value.selection === 'string' ? value.selection : null,
-    feedback: typeof value.feedback === 'string' ? value.feedback : null,
-    released: value.released,
-  };
+export function restore(value: unknown): GameState | null {
+  if (!value || typeof value !== 'object') return null;
+  const s = value as Partial<GameState>;
+  if (s.version !== 2 || !['intro', 'register', 'compare', 'solved'].includes(s.phase ?? '') || !s.transform ||
+      ![s.transform.dx, s.transform.dy, s.transform.angle, s.opacity, s.clip, s.falseMarks].every(Number.isFinite)) return null;
+  return { ...fresh(), ...s, transform: { ...s.transform } } as GameState;
 }

@@ -3,147 +3,164 @@ import './style.css';
 import en from '../locales/en.json';
 import { createScorm } from '../../../packages/core/src/scorm';
 import { createTranslator } from '../../../packages/core/src/locale';
-import { GATES, initialState, passed, restore, score, select, start, submit, type Gate, type GameState } from './rules';
+import { ANCHORS, CENTER, EXISTING_OPENING, PLANNED_OPENING, anchorErrors, canRegister, fresh, restore, transformPoint, tryInspect, type GameState, type Point } from './rules';
 
-const dictionaries = Object.fromEntries(
-  Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
-    .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]),
-);
+const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
+  .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]));
 const { t, locale } = createTranslator(en, dictionaries);
+document.documentElement.lang = locale;
+document.title = `Drone4Build · ${t('title')}`;
 const scorm = createScorm('m3-2-digital-handover');
 const app = document.querySelector<HTMLDivElement>('#app')!;
-if (!app) throw new Error('Missing app root');
-document.documentElement.lang = locale;
-document.title = `Drone4Build — ${t('app.title')}`;
+const saved = restore(scorm.load<GameState>());
+let state: GameState = fresh();
+let resumeAvailable = !!saved && saved.phase !== 'intro';
+type Drag = { mode: 'move' | 'rotate'; last: Point; lastAngle: number; pointerId: number };
+let drag: Drag | null = null;
 
-let state: GameState = restore(scorm.load<GameState>()) ?? initialState();
-let resumePrompt = state.mode === 'active';
+function esc(s: string) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!); }
+function tx(key: string, values?: Record<string, string | number>) { return esc(t(key, values)); }
+function persist() { scorm.save(state); }
+const names = ['A', 'B', 'C'];
+const BUILDING = 'M210 160 H620 V260 H750 V500 H210 Z';
 
-const choices: Record<Gate, string[]> = {
-  verify: ['ready-to-compare', 'reference-mismatch', 'units-problem'],
-  integrate: ['visual-drag', 'align-documented', 'compare-as-is'],
-  compare: ['point-density', 'opening-shift', 'line-style'],
-  release: ['draft-new', 'approved-old', 'qa-failed', 'approved-current'],
-};
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
-}
-function txt(key: string, values?: Record<string, string | number>): string { return escapeHtml(t(key, values)); }
-function persist(): void { scorm.save(state); }
-
-function header(): string {
-  const status = scorm.snapshot().status;
-  const statusKey = status === 'passed' ? 'app.passed' : status === 'failed' ? 'app.failed' : 'app.active';
-  return `<header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">D4B</span><div><span class="brand-overline">${txt('app.course')}</span><strong>${txt('app.title')}</strong></div></div><div class="topbar-right"><span class="module-label">${txt('app.subtitle')}</span><span class="status-pill">${txt('app.status', { status: t(statusKey) })}</span></div></header>`;
-}
-
-function progress(): string {
-  return `<nav class="gate-track" aria-label="${txt('app.progress', { current: Math.min(state.gate + 1, 4) })}">${GATES.map((gate, index) => {
-    const status = state.completed[index] ? 'done' : index === state.gate ? 'current' : 'pending';
-    return `<div class="gate-step ${status}"><span class="step-number">${String(index + 1).padStart(2, '0')}</span><span class="step-name">${txt(`gate.${gate}.name`)}</span><span class="step-state">${txt(`gate.${status === 'done' ? 'completeLabel' : status === 'current' ? 'currentLabel' : 'pendingLabel'}`)}</span></div>`;
-  }).join('')}</nav>`;
-}
-
-function intro(): string {
-  const saved = resumePrompt;
-  return `${header()}<main class="shell intro-shell"><div class="intro-visual">${diagram(false, false)}</div><section class="intro-copy"><p class="eyebrow">${txt('intro.eyebrow')}</p><h1>${txt('intro.title')}</h1><p class="intro-lead">${txt('intro.body')}</p><div class="intro-facts"><span>${txt('intro.duration')}</span><span>${txt('intro.scoring')}</span></div>${saved ? `<p class="resume-note">${txt('intro.resumeNote', { gate: state.gate + 1 })}</p><div class="action-row"><button class="primary" data-action="resume">${txt('intro.resume')}</button><button class="secondary" data-action="restart">${txt('intro.restart')}</button></div>` : `<button class="primary" data-action="start">${txt('intro.start')}</button>`}<p class="keyboard-hint">${txt('app.keyboard')}</p></section></main>`;
-}
-
-function metadata(): string {
-  const rows = ['purpose', 'source', 'date', 'reference', 'projectReference', 'units', 'qa', 'version'];
-  return `<section class="metadata-card" aria-label="${txt('metadata.title')}"><div class="panel-title"><span class="panel-icon" aria-hidden="true">▦</span><h2>${txt('metadata.title')}</h2></div><dl>${rows.map(row => `<div class="metadata-row"><dt>${txt(`metadata.${row}.label`)}</dt><dd>${txt(`metadata.${row}.value`)}</dd></div>`).join('')}</dl></section>`;
-}
-
-function points(x1: number, y1: number, x2: number, y2: number, step: number, className: string): string {
-  const count = Math.max(1, Math.floor(Math.hypot(x2 - x1, y2 - y1) / step));
+function dotLine(a: Point, b: Point, step = 10, cls = 'survey-dot') {
+  const count = Math.max(2, Math.ceil(Math.hypot(a.x - b.x, a.y - b.y) / step));
   return Array.from({ length: count + 1 }, (_, i) => {
-    const fraction = i / count;
-    const ripple = (i % 3 - 1) * 1.7;
-    const x = x1 + (x2 - x1) * fraction + (y1 === y2 ? 0 : ripple);
-    const y = y1 + (y2 - y1) * fraction + (y1 === y2 ? ripple : 0);
-    return `<circle class="${className}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.1"/>`;
+    const f = i / count, wobble = Math.sin(i * 19.3) * 1.4;
+    return `<circle class="${cls}" cx="${(a.x + (b.x - a.x) * f + wobble).toFixed(1)}" cy="${(a.y + (b.y - a.y) * f - wobble).toFixed(1)}" r="${i % 4 === 0 ? 2.7 : 1.9}"/>`;
   }).join('');
 }
+function dottedRect(x: number, y: number, w: number, h: number, cls: string) {
+  const p = [{x,y},{x:x+w,y},{x:x+w,y:y+h},{x,y:y+h}];
+  return p.map((a,i)=>dotLine(a,p[(i+1)%4],6,cls)).join('');
+}
+const perimeter = [{x:210,y:160},{x:620,y:160},{x:620,y:260},{x:750,y:260},{x:750,y:500},{x:210,y:500}];
+const cloudDots = perimeter.map((p,i)=>dotLine(p,perimeter[(i+1)%perimeter.length])).join('') +
+  dotLine({x:210,y:300},{x:750,y:300},13,'survey-dot secondary') +
+  dotLine({x:470,y:160},{x:470,y:500},12,'survey-dot secondary') +
+  dotLine({x:210,y:500},{x:620,y:160},17,'survey-dot secondary');
+const fineDots = dottedRect(EXISTING_OPENING.x,EXISTING_OPENING.y,EXISTING_OPENING.width,EXISTING_OPENING.height,'survey-dot detail');
 
-function diagram(aligned: boolean, withHotspots: boolean): string {
-  const survey = [
-    points(84, 276, 495, 276, 12, 'survey-dot'),
-    points(84, 94, 84, 276, 10, 'survey-dot'),
-    points(495, 94, 495, 276, 10, 'survey-dot'),
-    points(84, 94, 495, 94, 12, 'survey-dot'),
-    points(318, 168, 370, 168, 6, 'survey-dot opening-dot'),
-    points(318, 168, 318, 225, 6, 'survey-dot opening-dot'),
-    points(370, 168, 370, 225, 6, 'survey-dot opening-dot'),
-    points(318, 225, 370, 225, 6, 'survey-dot opening-dot'),
-  ].join('');
-  const hotspots = withHotspots ? `<div class="hotspot-layer" role="group" aria-label="${txt('gate.compare.choose')}"><button class="hotspot hot-opening ${state.selection === 'opening-shift' ? 'selected' : ''}" data-choice="opening-shift" aria-pressed="${state.selection === 'opening-shift'}">${txt('diagram.opening')}</button><button class="hotspot hot-density ${state.selection === 'point-density' ? 'selected' : ''}" data-choice="point-density" aria-pressed="${state.selection === 'point-density'}">${txt('diagram.density')}</button><button class="hotspot hot-style ${state.selection === 'line-style' ? 'selected' : ''}" data-choice="line-style" aria-pressed="${state.selection === 'line-style'}">${txt('diagram.style')}</button></div>` : '';
-  return `<div class="diagram-frame"><div class="diagram-head"><span class="diagram-head-title">${txt('diagram.title')}</span><span class="diagram-state ${aligned ? 'is-aligned' : ''}">${txt(aligned ? 'diagram.aligned' : 'diagram.unaligned')}</span></div><div class="diagram-canvas"><svg viewBox="0 0 580 350" role="img" aria-label="${txt(aligned ? 'diagram.description.aligned' : 'diagram.description.unaligned')}"><defs><pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse"><path d="M 25 0 L 0 0 0 25" fill="none" stroke="#253d57" stroke-width="0.7"/></pattern></defs><rect width="580" height="350" fill="#0b192a"/><rect width="580" height="350" fill="url(#grid)"/><path class="plan-outline" d="M84 276 V94 H495 V276 Z"/><path class="plan-opening" d="M260 168 H312 V225 H260 Z"/><path class="plan-roof" d="M70 94 H509"/><g transform="translate(${aligned ? '0 0' : '36 -20'})">${survey}</g><path class="ground" d="M47 293 H529"/></svg>${hotspots}</div><div class="diagram-legend"><span><i class="legend-plan"></i>${txt('diagram.planned')}</span><span><i class="legend-survey"></i>${txt('diagram.existing')}</span></div></div>`;
+function intro() {
+  return `<main class="slice-shell intro"><div class="eyebrow">${tx('brand')}</div><div class="intro-grid"><section><h1>${tx('introTitle')}</h1><p>${tx('introBody')}</p><div class="actions"><button class="btn-primary" data-action="start">${tx('start')}</button>${resumeAvailable ? `<button data-action="resume">${tx('resume')}</button><button data-action="restart">${tx('restart')}</button>` : ''}</div><p class="small-note">${tx('provisional')}</p></section><div class="intro-illustration" aria-hidden="true"><svg viewBox="0 0 460 320"><path d="M55 50 H320 V110 H400 V270 H55 Z" fill="#193b4a" stroke="#7aa9c6" stroke-width="4"/><g transform="translate(40 -28) rotate(11 230 165)">${dotLine({x:55,y:50},{x:320,y:50},8)}${dotLine({x:320,y:50},{x:400,y:270},8)}${dotLine({x:400,y:270},{x:55,y:270},8)}</g><circle cx="55" cy="50" r="10" fill="#e9be64"/><circle cx="320" cy="50" r="10" fill="#e9be64"/><circle cx="400" cy="270" r="10" fill="#e9be64"/></svg></div></div></main>`;
 }
 
-function optionCards(gate: Gate): string {
-  return `<div class="options" role="radiogroup" aria-label="${txt(`gate.${gate}.choose`)}">${choices[gate].map((choice, index) => {
-    const id = `${gate}-${choice}`;
-    return `<label class="option-card"><input type="radio" name="choice" value="${choice}" id="${id}" ${state.selection === choice ? 'checked' : ''}/><span class="option-index">${String.fromCharCode(65 + index)}</span><span class="option-copy"><strong>${txt(`option.${gate}.${choice}.title`)}</strong><small>${txt(`option.${gate}.${choice}.detail`)}</small></span><span class="option-check" aria-hidden="true"></span></label>`;
-  }).join('')}</div>`;
+function viewport() {
+  const surveyTransform = `translate(${state.transform.dx.toFixed(2)} ${state.transform.dy.toFixed(2)}) rotate(${state.transform.angle.toFixed(2)} ${CENTER.x} ${CENTER.y})`;
+  const errors = anchorErrors(state.transform);
+  const comparing = state.phase !== 'register';
+  return `<svg id="viewport" class="viewport ${comparing?'comparing':'registering'}" viewBox="0 0 920 620" tabindex="0" role="application" aria-label="${tx('viewLabel')}">
+    <defs><pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0 H0 V32" fill="none" stroke="#284354" stroke-width="1"/></pattern><clipPath id="reveal"><rect id="clip-rect" x="180" y="130" width="${(600*state.clip/100).toFixed(1)}" height="400"/></clipPath><filter id="glow"><feGaussianBlur stdDeviation="6"/></filter></defs>
+    <rect width="920" height="620" fill="#0b1e2c"/><rect width="920" height="620" fill="url(#grid)"/>
+    <path d="M20 545 H900" stroke="#778c8e" stroke-width="32" opacity=".27"/><path d="M20 545 H900" stroke="#c8b885" stroke-width="2" stroke-dasharray="25 18" opacity=".55"/>
+    <text x="42" y="586" class="map-label">${tx('road')}</text><text x="222" y="145" class="map-label">${tx('building')}</text>
+    <path d="${BUILDING}" fill="#1b3547" stroke="#7598ae" stroke-width="5"/>
+    <path d="M210 300 H750 M470 160 V500 M210 500 L620 160" fill="none" stroke="#62899e" stroke-width="2" opacity=".58"/>
+    <rect x="${PLANNED_OPENING.x}" y="${PLANNED_OPENING.y}" width="${PLANNED_OPENING.width}" height="${PLANNED_OPENING.height}" fill="#152636" stroke="#b5d3e8" stroke-width="3" stroke-dasharray="8 5"/>
+    ${comparing ? `<text x="${PLANNED_OPENING.x-2}" y="${PLANNED_OPENING.y-13}" class="map-label planned-label">${tx('planOpening')}</text>` : ''}
+    <g id="tethers">${ANCHORS.map((a,i)=>{const moved=transformPoint(a,state.transform);return `<line id="tether-${i}" x1="${a.x}" y1="${a.y}" x2="${moved.x.toFixed(1)}" y2="${moved.y.toFixed(1)}" class="tether ${errors[i]<20?'near':''}"/>`;}).join('')}</g>
+    ${ANCHORS.map((a,i)=>`<g class="model-anchor"><circle cx="${a.x}" cy="${a.y}" r="17"/><text x="${a.x}" y="${a.y+5}" text-anchor="middle">${names[i]}</text></g>`).join('')}
+    <g id="cloud" transform="${surveyTransform}" style="opacity:${state.opacity}">
+      <path d="${BUILDING}" class="cloud-hit" data-drag="move" aria-label="${tx('moveLayer')}"/>
+      <g pointer-events="none">${cloudDots}</g>
+      <g id="fine" clip-path="url(#reveal)" pointer-events="none" style="display:${comparing?'':'none'}">${fineDots}</g>
+      ${ANCHORS.map((a,i)=>`<g class="survey-anchor" pointer-events="none"><circle cx="${a.x}" cy="${a.y}" r="12"/><text x="${a.x}" y="${a.y+4}" text-anchor="middle">${names[i]}</text></g>`).join('')}
+      <path d="M470 330 V102" class="rotation-stem" pointer-events="none"/><circle cx="470" cy="102" r="20" class="rotation-handle" data-drag="rotate" aria-label="${tx('rotationHandle')}"/><path d="M461 102 A9 9 0 1 1 477 108" class="rotation-icon" pointer-events="none"/>
+    </g>
+    ${comparing ? `<line id="sweep-line" x1="${180+600*state.clip/100}" y1="145" x2="${180+600*state.clip/100}" y2="520" class="sweep-line"/><text x="${EXISTING_OPENING.x}" y="${EXISTING_OPENING.y+90}" class="map-label actual-label" style="display:${state.phase==='solved'?'':'none'}">${tx('actualOpening')}</text>` : ''}
+    ${state.lastMark ? `<circle cx="${state.lastMark.x}" cy="${state.lastMark.y}" r="38" class="inspection-mark ${state.phase==='solved'?'found':'miss'}" pointer-events="none"/>` : ''}
+    <text x="34" y="40" class="viewport-caption">${tx('site')}</text>
+  </svg>`;
 }
 
-function active(): string {
-  const gate = GATES[state.gate];
-  const aligned = state.gate >= 2;
-  const visual = gate === 'verify' ? metadata() : diagram(aligned, gate === 'compare');
-  const feedback = state.feedback ? `<div class="feedback ${state.feedback.endsWith('.correct') ? 'positive' : 'caution'}" role="status"><span aria-hidden="true">${state.feedback.endsWith('.correct') ? '✓' : '!'}</span><p>${txt(state.feedback)}</p></div>` : '';
-  return `${header()}<main class="shell game-shell">${progress()}<div class="game-grid"><section class="workspace-panel"><div class="workspace-top"><span class="eyebrow">${txt(`gate.${gate}.kicker`)}</span><span class="score-meter">${txt('app.points', { score: score(state) })}</span></div>${visual}<p class="workspace-caption">${txt(`gate.${gate}.context`)}</p></section><section class="decision-panel"><div class="decision-heading"><p class="eyebrow">${txt('app.progress', { current: state.gate + 1 })}</p><h1>${txt(`gate.${gate}.title`)}</h1><p>${txt(`gate.${gate}.prompt`)}</p></div>${gate === 'compare' ? `<div class="compare-instruction">${txt('gate.compare.choose')}</div>` : optionCards(gate)}${feedback}<div class="decision-footer"><button class="primary" data-action="submit" ${state.selection ? '' : 'disabled'}>${txt('gate.submit')}</button><p>${txt('gate.scoreHint')}</p></div></section></div></main>`;
+function workspace() {
+  const errors = anchorErrors(state.transform);
+  const phaseKey = state.phase==='register'?'stageRegister':state.phase==='compare'?'stageCompare':'stageSolved';
+  const helpKey = state.phase==='register'?'registerHelp':state.phase==='compare'?'compareHelp':'solvedHelp';
+  return `<main class="slice-shell"><header class="top"><div><div class="eyebrow">${tx('brand')}</div><h1>${tx('title')}</h1></div><span class="phase-badge">${tx(state.phase==='register'?'badgeRegister':state.phase==='compare'?'badgeCompare':'badgeSolved')}</span></header>
+    <div class="play-layout"><div class="world-panel"><div class="world-title"><span>${tx('model')}</span><span>${tx('survey')}</span></div>${viewport()}<div class="under-map"><span>${tx(state.phase==='register'?'ghost':state.phase==='compare'?'inspectHint':'feedback.found')}</span><span>${tx('provisional')}</span></div></div>
+    <aside class="instrument-panel"><p class="eyebrow">${tx(phaseKey)}</p><h2>${tx(phaseKey)}</h2><p>${tx(helpKey)}</p>
+      <div class="anchor-readout" aria-live="polite">${ANCHORS.map((_,i)=>`<div class="anchor-row"><b>${tx('anchor',{name:names[i]})}</b><span id="error-${i}">${tx('anchorStatus',{name:names[i],distance:Math.round(errors[i])})}</span><i id="lamp-${i}" class="lamp ${errors[i]<20?'near':''}"></i></div>`).join('')}</div>
+      <div class="registration-status" id="registration-status">${tx(state.phase==='register'?'anchorsNotReady':'anchorsReady')}</div>
+      ${state.phase==='register' ? `<p class="small-note">${tx('snapHint')}</p><button data-action="reset">${tx('reset')}</button>` : `<div class="compare-tools"><label>${tx('opacity')}<input id="opacity" type="range" min="20" max="100" value="${Math.round(state.opacity*100)}"/></label><label>${tx('clip')}<input id="clip" type="range" min="5" max="100" value="${state.clip}"/></label></div>`}
+      ${state.feedback ? `<div class="feedback ${state.phase==='solved'?'good':''}" role="status">${tx(state.feedback)}</div>` : ''}
+      <p class="keyboard-note">${tx('keyboard')}</p><div class="status-bottom">${tx('performance',{count:state.falseMarks})}</div>
+      ${state.phase==='solved' ? `<button class="btn-primary" data-action="replay">${tx('replay')}</button>` : ''}
+    </aside></div></main>`;
 }
 
-function result(): string {
-  const success = passed(state);
-  const resultRows = GATES.map((gate, index) => `<div class="result-row"><span>${txt(`gate.${gate}.name`)}</span><strong>${txt('result.gatePoints', { points: Math.max(10, 25 - state.errors[index] * 5) })}</strong></div>`).join('');
-  return `${header()}<main class="shell result-shell"><section class="result-card"><div class="result-emblem ${success ? 'pass' : 'fail'}" aria-hidden="true">${success ? '✓' : '↻'}</div><p class="eyebrow">${txt('result.eyebrow')}</p><h1>${txt(success ? 'result.pass.title' : 'result.fail.title')}</h1><p class="result-lead">${txt(success ? 'result.pass.body' : 'result.fail.body')}</p><div class="result-score"><span>${txt('result.score')}</span><strong>${score(state)}<small>/100</small></strong><span>${txt('result.threshold')}</span></div><div class="result-meta"><span>✓ ${txt('result.release')}</span></div><div class="result-breakdown"><h2>${txt('result.breakdown')}</h2>${resultRows}</div><div class="action-row"><button class="primary" data-action="replay">${txt('result.replay')}</button><button class="secondary" data-action="finish">${txt('result.finish')}</button></div></section></main>`;
+function render() { app.innerHTML = state.phase==='intro' ? intro() : workspace(); }
+function svgPoint(svg: SVGSVGElement, e: PointerEvent | MouseEvent): Point {
+  const point = svg.createSVGPoint(); point.x=e.clientX; point.y=e.clientY;
+  const local=point.matrixTransform(svg.getScreenCTM()!.inverse()); return {x:local.x,y:local.y};
+}
+function liveTransform() {
+  const cloud=app.querySelector<SVGGElement>('#cloud'); if (!cloud) return;
+  cloud.setAttribute('transform',`translate(${state.transform.dx.toFixed(2)} ${state.transform.dy.toFixed(2)}) rotate(${state.transform.angle.toFixed(2)} ${CENTER.x} ${CENTER.y})`);
+  const errors=anchorErrors(state.transform);
+  ANCHORS.forEach((a,i)=>{
+    const moved=transformPoint(a,state.transform);
+    const tether=app.querySelector<SVGLineElement>(`#tether-${i}`)!;
+    tether.setAttribute('x2',String(moved.x));tether.setAttribute('y2',String(moved.y));tether.classList.toggle('near',errors[i]<20);
+    app.querySelector(`#error-${i}`)!.textContent=t('anchorStatus',{name:names[i],distance:Math.round(errors[i])});
+    app.querySelector(`#lamp-${i}`)!.classList.toggle('near',errors[i]<20);
+  });
+  app.querySelector('#registration-status')!.textContent=t(canRegister(state.transform)?'anchorsReady':'anchorsNotReady');
+}
+function maybeLock() {
+  if (state.phase !== 'register' || !canRegister(state.transform)) { persist(); return; }
+  state={...state, phase:'compare', transform:{dx:0,dy:0,angle:0}, feedback:'feedback.lock'};
+  persist();render();app.querySelector<SVGSVGElement>('#viewport')?.focus();
 }
 
-function render(): void {
-  app.innerHTML = resumePrompt || state.mode === 'intro' ? intro() : state.mode === 'result' ? result() : active();
-}
-
-app.addEventListener('change', event => {
-  const input = event.target as HTMLInputElement;
-  if (input.name === 'choice' && input.value) {
-    state = select(state, input.value);
-    persist();
-    app.querySelector('.feedback')?.remove();
-    app.querySelector<HTMLButtonElement>('[data-action="submit"]')?.removeAttribute('disabled');
+app.addEventListener('click',e=>{
+  const button=(e.target as Element).closest<HTMLButtonElement>('[data-action]');
+  if(button){
+    const action=button.dataset.action;
+    if(action==='start'||action==='restart'||action==='reset'||action==='replay'){state={...fresh(),phase:'register'};resumeAvailable=false;persist();render();app.querySelector<SVGSVGElement>('#viewport')?.focus();return;}
+    if(action==='resume'&&saved){state=saved;resumeAvailable=false;render();return;}
   }
+  const svg=(e.target as Element).closest<SVGSVGElement>('#viewport');
+  if(svg&&state.phase==='compare'&&!drag){state=tryInspect(state,svgPoint(svg,e as MouseEvent));persist();if(state.phase==='solved')scorm.complete(100,true);render();}
 });
 
-app.addEventListener('click', event => {
-  const target = event.target as HTMLElement;
-  const choiceButton = target.closest<HTMLButtonElement>('[data-choice]');
-  if (choiceButton?.dataset.choice) {
-    state = select(state, choiceButton.dataset.choice);
-    persist();
-    app.querySelector('.feedback')?.remove();
-    app.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach(button => {
-      const selected = button.dataset.choice === state.selection;
-      button.classList.toggle('selected', selected);
-      button.setAttribute('aria-pressed', String(selected));
-    });
-    app.querySelector<HTMLButtonElement>('[data-action="submit"]')?.removeAttribute('disabled');
-    return;
-  }
-  const action = target.closest<HTMLButtonElement>('[data-action]')?.dataset.action;
-  if (!action) return;
-  if (action === 'start') state = start(state);
-  if (action === 'resume') resumePrompt = false;
-  if (action === 'restart' || action === 'replay') { state = start(initialState()); resumePrompt = false; }
-  if (action === 'submit') {
-    const wasResult = state.mode === 'result';
-    state = submit(state);
-    if (!wasResult && state.mode === 'result') scorm.complete(score(state), passed(state));
-  }
-  if (action === 'finish') { scorm.finish(); return; }
-  if (action !== 'resume' && action !== 'finish') persist();
-  render();
+app.addEventListener('pointerdown',e=>{
+  if(state.phase!=='register')return;
+  const target=(e.target as Element).closest<SVGElement>('[data-drag]');
+  const svg=app.querySelector<SVGSVGElement>('#viewport');
+  if(!target||!svg)return;
+  const point=svgPoint(svg,e);
+  const center={x:CENTER.x+state.transform.dx,y:CENTER.y+state.transform.dy};
+  drag={mode:target.getAttribute('data-drag') as Drag['mode'],last:point,lastAngle:Math.atan2(point.y-center.y,point.x-center.x),pointerId:e.pointerId};
+  svg.setPointerCapture(e.pointerId);svg.focus();e.preventDefault();
 });
-
+app.addEventListener('pointermove',e=>{
+  if(!drag||drag.pointerId!==e.pointerId)return;
+  const svg=app.querySelector<SVGSVGElement>('#viewport')!;
+  const point=svgPoint(svg,e);
+  if(drag.mode==='move'){state.transform.dx+=point.x-drag.last.x;state.transform.dy+=point.y-drag.last.y;}
+  else{const center={x:CENTER.x+state.transform.dx,y:CENTER.y+state.transform.dy};const angle=Math.atan2(point.y-center.y,point.x-center.x);let diff=(angle-drag.lastAngle)*180/Math.PI;if(diff>180)diff-=360;if(diff<-180)diff+=360;state.transform.angle+=diff;drag.lastAngle=angle;}
+  drag.last=point;liveTransform();
+});
+app.addEventListener('pointerup',e=>{if(!drag||drag.pointerId!==e.pointerId)return;drag=null;maybeLock();});
+app.addEventListener('pointercancel',()=>{if(drag){drag=null;persist();}});
+app.addEventListener('keydown',e=>{
+  if(state.phase!=='register'||(e.target as Element).id!=='viewport')return;
+  const key=e.key.toLowerCase();
+  if(key==='arrowleft')state.transform.dx-=5;
+  else if(key==='arrowright')state.transform.dx+=5;
+  else if(key==='arrowup')state.transform.dy-=5;
+  else if(key==='arrowdown')state.transform.dy+=5;
+  else if(key==='q')state.transform.angle-=1;
+  else if(key==='e')state.transform.angle+=1;
+  else return;
+  e.preventDefault();liveTransform();maybeLock();
+});
+app.addEventListener('input',e=>{
+  const input=e.target as HTMLInputElement;
+  if(input.id==='opacity'){state.opacity=Number(input.value)/100;const cloud=app.querySelector<SVGGElement>('#cloud');if(cloud)cloud.style.opacity=String(state.opacity);}
+  if(input.id==='clip'){state.clip=Number(input.value);app.querySelector('#clip-rect')?.setAttribute('width',String(600*state.clip/100));const x=180+600*state.clip/100;const line=app.querySelector('#sweep-line');line?.setAttribute('x1',String(x));line?.setAttribute('x2',String(x));}
+});
+app.addEventListener('change',e=>{if((e.target as HTMLElement).matches('input[type=range]'))persist();});
 render();
