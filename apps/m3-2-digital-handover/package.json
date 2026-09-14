@@ -1,0 +1,11 @@
+{
+  "name": "@drone4build/m3-2-digital-handover",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --base ./",
+    "test": "node --experimental-strip-types --test src/*.test.ts"
+  }
+}
