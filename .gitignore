@@ -1,0 +1,5 @@
+node_modules/
+dist/
+**/dist/
+*.local
+legacy/drone-arcade/drone4build-scorm12-flightlab.zip

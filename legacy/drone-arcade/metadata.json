@@ -1,0 +1,6 @@
+{
+  "name": "Drone Arcade",
+  "description": "A high-fidelity drone flight simulator set in a detailed urban environment featuring telemetry, path objectives, and multiple cameras.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
