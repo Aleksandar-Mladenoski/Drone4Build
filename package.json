@@ -1,0 +1,31 @@
+{
+  "name": "drone4build-mini-games",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "hub": "vite --host 0.0.0.0",
+    "build": "node tools/build.mjs",
+    "test": "node tools/test.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:locales": "node tools/check-locales.mjs",
+    "package:scorm": "node tools/package-scorm.mjs",
+    "validate:scorm": "node tools/validate-scorm.mjs",
+    "qa": "npm run test && npm run typecheck && npm run check:locales && npm run build && npm run package:scorm && npm run validate:scorm"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.1",
+    "@types/three": "^0.185.1",
+    "adm-zip": "^0.6.0",
+    "fast-xml-parser": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}
