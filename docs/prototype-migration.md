@@ -1,0 +1,7 @@
+# M1.2 prototype migration
+
+`drone-arcade.zip` contains a Vite 6 / React 19 / Three.js 0.185 prototype. Its `src/App.tsx` was about 126 KB and combined a procedural construction world, drone geometry, flight movement, camera, hazards, UI, scoring and unsupported regulatory teaching text. It also declared Gemini, Express, dotenv, Tailwind, motion and icon dependencies. The original ZIP remains untouched; extracted source is preserved in `legacy/drone-arcade/`.
+
+The production M1.2 retains and adapts the prototype's local procedural window and helipad texture generators, quadcopter body/rotor design, chase-camera approach, assisted horizontal motion and strong auto-hover damping, waypoint marker concept, and radial exclusion-zone test. These systems are now separated into `prototype-assets.ts`, `FlightWorld.tsx`, and pure `rules.ts`. The flight is deliberately shorter with broader markers, one known work area and one clearly changing route condition. A planning screen and a hold/reassess/return phase implement the approved educational sequence.
+
+The single large prototype component, arcade health/battery punishment, demo bypass, unsupported EASA/FAA limits and certification language, old SCORM 2004 fallback, and unused AI scaffolding were removed. The shared SCORM 1.2 wrapper replaces direct calls in the prototype. Replacement was needed because the old UX could grade gaming skill and unsupported claims instead of professional judgement, and the monolithic component was difficult to localise and test. No runtime services or AI keys are used.

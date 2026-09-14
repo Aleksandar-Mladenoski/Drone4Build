@@ -1,0 +1,5 @@
+# Assets and licences
+
+All four final packages use local assets only. M1.2's window and helipad canvas textures and quadcopter geometry derive from source in the user-supplied `drone-arcade.zip`. Its site geometry, route markers and work-area visualization were adapted or authored in this repository. M2.2's four thermal and four paired visual SVGs are original synthetic illustrations in its `public/assets/`; they portray qualitative evidence without real measurement claims. M1.1 and M3.2 use authored SVG/CSS interface graphics. There are no downloaded stock images, fonts, or media.
+
+Production runtime libraries are React 19, React DOM 19, and Three.js 0.185 for M1.2. Vite 6, TypeScript 5.8, adm-zip and fast-xml-parser are build/test tools. These are third-party open-source packages installed through npm; their exact resolved versions and licence metadata are in `package-lock.json` and `node_modules` after installation. The old prototype's nested SCORM ZIP and `.env.example` are not placed in final packages. The legacy source is retained for traceability, not used as an independent production deliverable.

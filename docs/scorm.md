@@ -1,0 +1,9 @@
+# SCORM 1.2 behavior
+
+Each ZIP contains one SCO with `index.html` as its launch resource. The shared wrapper discovers `window.API` in the current/parent/opener chain, calls `LMSInitialize('')`, and uses SCORM 1.2 keys only. It maintains `cmi.core.lesson_status`, `cmi.core.score.raw/min/max`, `cmi.core.session_time`, `cmi.core.exit`, and `cmi.suspend_data`; calls `LMSCommit('')` at checkpoints and results; and calls `LMSFinish('')` on page exit. If no LMS is present, a local mock persists the same fields to `localStorage` under `d4b:mock:<game-id>`.
+
+An unattempted or previously failed launch begins as `incomplete`. A recoverable mistake remains incomplete. An explicit final unsuccessful result records `failed`, unless the learner already passed an earlier attempt. A pass records `passed`. Across replays, the best completed passing score is preserved; a later lower pass or failure cannot lower it. Before any pass, the newest final failed score is recorded. Scores are integers from 0 to 100. M1.1 and M1.2 require 80; M2.2 and M3.2 require 75, with the mandatory critical conditions enforced in game rules.
+
+Every game stores a compact JSON checkpoint in `cmi.suspend_data` and offers resume or restart after reload. The wrapper caps the payload at 4096 characters. The 3D flight game restores a phase checkpoint rather than exact frame position. `cmi.core.session_time` uses SCORM 1.2 `HHHH:MM:SS.CC` format and records time at saves, results and termination. Incomplete exits set `cmi.core.exit` to `suspend`. Browser unload is best effort; gameplay completion commits directly.
+
+For local QA, launch with `?scorm=mock` to force the persistent mock. The hub shows and resets mock records. A plain standalone launch without an LMS also falls back to the mock. Query `?lang=<code>` selects an available locale. The ZIPs require no repository files or network access after upload.
