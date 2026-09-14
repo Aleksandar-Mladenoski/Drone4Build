@@ -1,0 +1,7 @@
+# M1.2 gameplay comparison (internal)
+
+The original `legacy/drone-arcade/src/App.tsx` has free 3D flight, hover assistance, orbit/FPV/chase cameras, orbit controls, radar, battery, waypoints, landing, buildings, and an animated crane with a suspended-load collider. Its large scene and telemetry make flying feel like the primary activity. It also couples gameplay to a dense dashboard, uses abrupt violation screens and unsupported regulatory/certification claims, and its prototype physics and scoring are hard to reason about.
+
+The previous M1.2 kept the procedural drone and textures, gentle movement damping, a designated pad, a crane area, a small map, and SCORM/localisation integration. It replaced the flight with a short fixed northward corridor, static camera, one checkpoint, and an A/B contingency choice. The crane had no moving hazard, route alternatives had no real role, and the player could complete the interaction quickly by following UI steps.
+
+Live Shift restores the useful flight systems as a smaller, clearer world: two inspection sites at different altitudes, east and west approach choices, three camera modes, a live tactical map, fictional endurance, assisted hover, active crane rotation/load, free rerouting, and a controlled landing. The crane starts work during flight; the response is to observe, hold, and navigate around its area. The approved educational point is situational reassessment, without presenting invented rules or numeric limits.

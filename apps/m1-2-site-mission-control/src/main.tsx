@@ -1,71 +1,36 @@
+import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useState } from 'react';
-import { createScorm } from '../../../packages/core/src/scorm';
-import { createTranslator } from '../../../packages/core/src/locale';
-import en from '../locales/en.json';
-import { FlightWorld } from './FlightWorld';
-import { canLand, initialState, planIsSafe, score, scoreBreakdown, passed, type GameState, type Plan } from './rules';
 import '../../../packages/core/src/ui.css';
 import './style.css';
+import { createScorm } from '../../../packages/core/src/scorm.ts';
+import { FlightWorld, type Telemetry } from './FlightWorld.tsx';
+import { initialState, objectiveOrder, score, type GameState, type ObjectiveId, type Route } from './rules.ts';
 
-const scorm = createScorm('m1-2-site-mission-control');
-const dictionaries = Object.fromEntries(Object.entries(import.meta.glob<Record<string, string>>('../locales/*.json', { eager: true, import: 'default' }))
-  .map(([path, messages]) => [path.match(/\/([^/]+)\.json$/)?.[1] ?? 'en', messages]));
-const { t, locale } = createTranslator(en, dictionaries);
-document.documentElement.lang = locale;
-const saved = scorm.load<GameState>();
-
-function SiteMap({ active }: { active: boolean }) {
-  return <div className="site-map" role="img" aria-label={t('map')}>
-    <svg viewBox="0 0 360 235" aria-hidden="true">
-      <rect width="360" height="235" rx="14" fill="#294b55"/>
-      <path d="M166 218 V12" stroke="#9fb5aa" strokeWidth="78" opacity=".65"/>
-      <rect x="120" y="174" width="76" height="44" rx="5" fill="#dba83b"/><text x="158" y="200" textAnchor="middle" fill="#102a33" fontSize="12" fontWeight="bold">H</text>
-      <rect x="91" y="92" width="68" height="70" rx="25" fill="#b44949" opacity=".85"/>
-      <path d="M158 188 C207 170 225 126 206 77" fill="none" stroke="#74e4c8" strokeWidth="7" strokeDasharray="10 7"/>
-      <circle cx="206" cy="77" r="10" fill="#74e4c8"/>
-      {active&&<rect x="70" y="0" width="220" height="47" fill="#d15c4c" opacity=".72"/>}
-    </svg>
-    <div className="map-legend"><span><b className="legend-pad"/>{t('pad')}</span><span><b className="legend-known"/>{t('knownZone')}</span><span><b className="legend-target"/>{t('target')}</span>{active&&<span><b className="legend-new"/>{t('newZoneLabel')}</span>}</div>
-  </div>;
+const scorm=createScorm('m1-2-site-mission-control');
+document.title='Drone4Build · Site Mission Control: Live Shift';
+const root=document.getElementById('root')!;
+const initialTelemetry:Telemetry={x:0,y:.7,z:65,yaw:0,speed:0,battery:100,elapsed:0,camera:0,hover:true,craneActive:false,hold:0,target:'roof',warning:''};
+function command(value:string){window.dispatchEvent(new CustomEvent('d4b-flight-command',{detail:value}));}
+function FlightButton({code,label}: {code:string;label:string}){
+  return <button className="flight-button" onPointerDown={event=>{event.currentTarget.setPointerCapture(event.pointerId);window.dispatchEvent(new CustomEvent('d4b-flight-button',{detail:{key:code,pressed:true}}));}} onPointerUp={()=>window.dispatchEvent(new CustomEvent('d4b-flight-button',{detail:{key:code,pressed:false}}))} onPointerCancel={()=>window.dispatchEvent(new CustomEvent('d4b-flight-button',{detail:{key:code,pressed:false}}))}>{label}</button>;
 }
-
-function Choice({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" className="choice" aria-pressed={selected} onClick={onClick}>{children}</button>;
+function Map({telemetry,completed,route}: {telemetry:Telemetry;completed:ObjectiveId[];route:Route}){
+  const x=(telemetry.x+95)*200/190,y=(telemetry.z+95)*200/190;
+  return <svg className="site-map" viewBox="0 0 200 200" role="img" aria-label="Site map with drone, pad, objectives, and crane area"><rect width="200" height="200" rx="10" fill="#203844"/><path d="M99 0v200" stroke="#65747a" strokeWidth="15"/><path d="M37 0v200M163 0v200" stroke="#87918d" strokeWidth="4" strokeDasharray="5 7"/><rect x="23" y="18" width="28" height="32" fill="#738d99"/><rect x="142" y="18" width="28" height="40" fill="#738d99"/><rect x="23" y="114" width="30" height="27" fill="#738d99"/><rect x="147" y="108" width="27" height="30" fill="#738d99"/><path d={route==='east'?'M100 168 Q175 125 140 65 Q90 20 59 45':'M100 168 Q20 115 59 45 Q110 10 140 65'} fill="none" stroke="#d4ba78" strokeDasharray="4 5" strokeWidth="2"/><circle cx="100" cy="105" r="17" fill="#e97d5933" stroke="#e97d59" strokeDasharray="3 3"/><circle cx="100" cy="168" r="6" fill="#dcb76f"/><circle cx="140" cy="65" r="7" fill={completed.includes('roof')?'#68dab6':'#f0cf7d'}/><circle cx="59" cy="49" r="7" fill={completed.includes('facade')?'#68dab6':'#f0cf7d'}/><circle cx={x} cy={y} r="5" fill="#55f2d1" stroke="#102e35" strokeWidth="2"/></svg>;
 }
-
-function App() {
-  const [state, setState] = useState<GameState>(initialState);
-  const [resumeAvailable, setResumeAvailable] = useState(!!saved && saved.phase !== 'intro');
-  const [position, setPosition] = useState({ x: 0, z: 8, y: 1.6 });
-  const update = (next: GameState) => { setState(next); scorm.save(next); };
-  const newMission = () => { const next = { ...initialState(), phase: 'plan' as const }; setResumeAvailable(false); update(next); };
-  const revisePlan = (field: keyof Plan, value: string) => update({ ...state, plan: { ...state.plan, [field]: value }, feedback: '' });
-  const launch = () => {
-    if (!state.plan.route || !state.plan.launch || !state.plan.response) { update({ ...state, feedback: 'planIncomplete' }); return; }
-    if (!planIsSafe(state.plan)) { update({ ...state, planErrors: state.planErrors + 1, feedback: 'planUnsafe' }); return; }
-    update({ ...state, phase: 'flight', planCleared: true, feedback: 'planGood' });
-  };
-  const endAttempt = () => { const next = { ...state, phase: 'result' as const, feedback: '' }; update(next); scorm.complete(score(next), false); };
-  const zone = (kind: 'known' | 'new') => setState(current => { const next = { ...current, flightErrors: current.flightErrors + 1, feedback: kind === 'known' ? 'zone' : 'newZone' }; scorm.save(next); return next; });
-  const checkpoint = () => setState(current => { if (current.phase !== 'flight') return current; const next = { ...current, phase: 'adapt' as const, checkpoint: true, feedback: 'checkpoint' }; scorm.save(next); return next; });
-  const adapt = (safe: boolean) => {
-    if (!safe) { update({ ...state, adaptErrors: state.adaptErrors + 1, feedback: 'adaptWrong' }); return; }
-    update({ ...state, phase: 'return', safeResponse: true, feedback: 'adaptGood' });
-  };
-  const land = () => {
-    if (!canLand(position.x, position.z, position.y)) { update({ ...state, feedback: 'notAtPad' }); return; }
-    const next = { ...state, phase: 'result' as const, landed: true, feedback: '' }; update(next); scorm.complete(score(next), passed(next));
-  };
-  const points = score(state);
-  const status = scorm.snapshot();
-  return <main className="shell mission-shell">
-    <header className="mission-head"><div><div className="eyebrow">{t('brand')}</div><h1>{t('title')}</h1><p className="muted">{t('subtitle')}</p></div><div className="scorm-pill">{t('mock',{mode:status.mode,status:status.status})}</div></header>
-    {state.phase === 'intro' && <section className="intro-layout"><div className="panel"><span className="eyebrow">{t('goal')}</span><h2>{t('introTitle')}</h2><p>{t('introText')}</p><div className="actions"><button className="btn-primary" onClick={newMission}>{t('start')}</button>{resumeAvailable&&<button onClick={() => { if (saved) { setState(saved); setResumeAvailable(false); } }}>{t('resume')}</button>}</div></div><SiteMap active={false}/></section>}
-    {state.phase === 'plan' && <div className="plan-layout"><section className="panel"><div className="eyebrow">{t('progress',{current:1})}</div><h2>{t('routeTitle')}</h2><div className="choice-stack"><Choice selected={state.plan.route==='east'} onClick={()=>revisePlan('route','east')}>{t('routeEast')}</Choice><Choice selected={state.plan.route==='west'} onClick={()=>revisePlan('route','west')}>{t('routeWest')}</Choice></div><h2>{t('launchTitle')}</h2><div className="choice-stack"><Choice selected={state.plan.launch==='designated'} onClick={()=>revisePlan('launch','designated')}>{t('launchDesignated')}</Choice><Choice selected={state.plan.launch==='unreviewed'} onClick={()=>revisePlan('launch','unreviewed')}>{t('launchUnreviewed')}</Choice></div><h2>{t('responseTitle')}</h2><div className="choice-stack"><Choice selected={state.plan.response==='hold-return'} onClick={()=>revisePlan('response','hold-return')}>{t('responseHold')}</Choice><Choice selected={state.plan.response==='continue'} onClick={()=>revisePlan('response','continue')}>{t('responseContinue')}</Choice></div>{state.feedback&&<div className="feedback" role="status">{t(state.feedback)}</div>}<div className="actions"><button className="btn-primary" onClick={launch}>{t('clearPlan')}</button><button onClick={endAttempt}>{t('endAttempt')}</button></div></section><SiteMap active={false}/></div>}
-    {['flight','adapt','return'].includes(state.phase) && <div className="flight-layout"><div className="flight-panel"><FlightWorld phase={state.phase} onCheckpoint={checkpoint} onZone={zone} onPosition={(x,z,y)=>setPosition({x,z,y})} label={t('flightView')}/><div className="flight-stats"><span>{t('altitude',{height:position.y.toFixed(1)})}</span><span>{t('distance',{distance:Math.hypot(position.x-4,position.z+10).toFixed(1)})}</span><span>{t('statusHover')}</span></div></div><section className="panel mission-sidebar"><div className="eyebrow">{t('progress',{current:state.phase==='flight'?2:state.phase==='adapt'?3:4})}</div><h2>{t(state.phase==='flight'?'flightTitle':state.phase==='adapt'?'adaptTitle':'returnTitle')}</h2><p>{t(state.phase==='flight'?'flightText':state.phase==='adapt'?'adaptText':'returnText')}</p>{state.feedback&&<div className="feedback" role="status">{t(state.feedback)}</div>}{state.phase==='adapt'&&<div className="choice-stack"><button onClick={()=>adapt(false)}>{t('adaptContinue')}</button><button className="btn-primary" onClick={()=>adapt(true)}>{t('adaptReturn')}</button></div>}{state.phase==='return'&&<button className="btn-primary" onClick={land}>{t('land')}</button>}{state.phase!=='adapt'&&<div className="control-pad" aria-label={t('instructions')}>{([['w','buttonForward'],['s','buttonBack'],['a','buttonLeft'],['d','buttonRight'],['e','buttonUp'],['q','buttonDown']] as const).map(([key,label])=><button key={key} onClick={()=>window.dispatchEvent(new CustomEvent('d4b-nudge',{detail:key}))}>{t(label)}</button>)}</div>}<SiteMap active={state.phase!=='flight'}/><button className="exit-button" onClick={endAttempt}>{t('endAttempt')}</button></section></div>}
-    {state.phase==='result'&&<section className="panel result-panel"><div className="eyebrow">{t('progress',{current:4})}</div><h2>{t('resultTitle')}</h2><div className="result-score">{points}</div><p>{t(passed(state)?'resultPass':state.landed?'resultFail':'resultUnfinished')}</p><p>{t('resultScore',{score:points})}</p><p className="muted">{t('resultBreakdown',scoreBreakdown(state))}</p><button className="btn-primary" onClick={newMission}>{t('replay')}</button></section>}
-  </main>;
+function App(){
+  const [game,setGame]=useState<GameState>(initialState());
+  const [telemetry,setTelemetry]=useState<Telemetry>(initialTelemetry);
+  const [showHelp,setShowHelp]=useState(false);
+  const order=objectiveOrder(game.route);
+  const targetName=telemetry.target==='pad'?'Return to launch pad':telemetry.target==='roof'?'Roof edge inspection':'Façade inspection';
+  function start(){setGame(prev=>({...prev,phase:'flight'}));}
+  function objective(id:ObjectiveId){setGame(prev=>{if(prev.completed.includes(id))return prev;const next={...prev,completed:[...prev.completed,id]};scorm.save(next);return next;});}
+  function crane(){setGame(prev=>({...prev,craneActive:true}));}
+  function encounter(){setGame(prev=>({...prev,encounters:prev.encounters+1}));}
+  function land(battery:number,elapsed:number){setGame(prev=>{if(prev.phase==='result')return prev;const next:GameState={...prev,landed:true,phase:'result',battery,elapsed};scorm.complete(score(next),true);scorm.save(next);return next;});}
+  return <div className="flight-shell"><header className="game-header"><div><div className="eyebrow">DRONE4BUILD · M1.2</div><strong>✦ Site Mission Control <span>Live Shift</span></strong></div><div className="header-right"><span>{scorm.snapshot().mode==='mock'?'Standalone / SCORM mock':'Connected to LMS'}</span><button onClick={()=>setShowHelp(!showHelp)}>Controls ?</button></div></header>
+    {game.phase==='brief'?<main className="brief-layout"><section className="brief-copy"><div className="eyebrow">LIVE FLIGHT MISSION</div><h1>Plan a route. Fly the shift.</h1><p>Inspect the roof edge and façade, adapt when the crane begins moving, and land at the launch pad. The drone flies freely through the construction site; your route is a plan, not a rail.</p><div className="mission-points"><div><b>01</b><span>Choose an inspection order</span></div><div><b>02</b><span>Hold steady at each marked viewpoint</span></div><div><b>03</b><span>Route around the crane and return safely</span></div></div><div className="route-picker"><button className={game.route==='east'?'selected':''} onClick={()=>setGame(prev=>({...prev,route:'east'}))}>East route <small>Roof → Façade</small></button><button className={game.route==='west'?'selected':''} onClick={()=>setGame(prev=>({...prev,route:'west'}))}>West route <small>Façade → Roof</small></button></div><button className="primary" onClick={start}>Enter live shift →</button></section><aside className="brief-map panel"><div className="eyebrow">SITE PLAN</div><h2>Two viewpoints. One changing site.</h2><Map telemetry={initialTelemetry} completed={[]} route={game.route}/><div className="map-key"><span>● Launch pad</span><span>● Inspection point</span><span>◌ Crane zone</span></div></aside></main>:game.phase==='result'?<main className="result panel"><div className="eyebrow">FLIGHT COMPLETE</div><h1>Shift closed safely</h1><p>Both inspections were recorded and the aircraft returned to the pad.</p><div className="result-grid"><div><strong>{score(game)}%</strong><span>Mission score</span></div><div><strong>{Math.round(game.battery)}%</strong><span>Battery remaining</span></div><div><strong>{game.encounters}</strong><span>Collision warnings</span></div></div><button className="primary" onClick={()=>{setGame(initialState());setTelemetry(initialTelemetry);}}>Fly again</button></main>:<main className="flight-layout"><section className="world-panel"><FlightWorld route={game.route} onTelemetry={setTelemetry} onObjective={objective} onCrane={crane} onEncounter={encounter} onLand={land}/><div className="flight-overlay top"><div className="live">● LIVE SHIFT</div><div className="objective"><span>NEXT OBJECTIVE</span><strong>{targetName}</strong><i style={{width:`${Math.round(telemetry.hold*100)}%`}}/></div><div className="battery">BATTERY <strong>{Math.round(telemetry.battery)}%</strong></div></div>{telemetry.warning&&<div className="warning" role="status">⚠ {telemetry.warning}</div>}<div className="flight-overlay bottom"><span>ALT {telemetry.y.toFixed(1)} m</span><span>SPD {telemetry.speed.toFixed(1)} m/s</span><span>CAM {['CHASE','FPV','ORBIT'][telemetry.camera]}</span><span>{telemetry.hover?'HOVER ON':'HOVER OFF'}</span><span>{Math.floor(telemetry.elapsed/60)}:{String(Math.floor(telemetry.elapsed%60)).padStart(2,'0')}</span></div></section><aside className="flight-sidebar"><div className="sidebar-card"><div className="eyebrow">SITE MAP</div><Map telemetry={telemetry} completed={game.completed} route={game.route}/><p className={telemetry.craneActive?'crane-active':''}>● Crane {telemetry.craneActive?'MOVING — avoid red zone':'standing by'}</p></div><div className="sidebar-card mission-progress"><div className="eyebrow">MISSION</div>{order.map((id,index)=><div key={id} className={game.completed.includes(id)?'done':''}><b>{index+1}</b><span>{id==='roof'?'Roof edge':'Façade'}<small>{game.completed.includes(id)?'Recorded':'Hold position for 3 seconds'}</small></span></div>)}<div className={game.landed?'done':''}><b>3</b><span>Return to pad<small>Descend, slow down, then land</small></span></div></div><div className="sidebar-card action-card"><div className="eyebrow">FLIGHT COMMANDS</div><button onClick={()=>command('launch')}>Launch / take off</button><button onClick={()=>command('camera')}>Camera [{['Chase','FPV','Orbit'][telemetry.camera]}]</button><button onClick={()=>command('hover')}>Hover {telemetry.hover?'ON':'OFF'}</button><button onClick={()=>command('land')} disabled={telemetry.target!=='pad'}>Land at pad</button><div className="touch-controls"><div><FlightButton code="w" label="↑"/><FlightButton code="a" label="←"/><FlightButton code="s" label="↓"/><FlightButton code="d" label="→"/></div><div><FlightButton code="e" label="Up"/><FlightButton code="q" label="Down"/></div></div></div></aside></main>}
+    {showHelp&&<div className="help-backdrop" onClick={()=>setShowHelp(false)}><div className="help panel" onClick={event=>event.stopPropagation()}><button className="close" onClick={()=>setShowHelp(false)}>×</button><h2>Flight controls</h2><p>Launch with the button. W/A/S/D fly forward, left, back and right. Q/E change altitude; arrows turn. Hold Shift for speed. C cycles camera, H toggles hover, L lands when low and slow at the pad. Drag in orbit view to look around.</p><p>Hold nearly still inside each turquoise inspection ring to record it. The crane starts moving during the shift; go around its active red zone. Return to the gold launch pad to finish.</p></div></div>}</div>;
 }
-
-createRoot(document.getElementById('root')!).render(<App/>);
+createRoot(root).render(<App/>);

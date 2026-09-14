@@ -1,15 +1,40 @@
-export type Phase = 'intro' | 'plan' | 'flight' | 'adapt' | 'return' | 'result';
-export type Plan = { route: '' | 'east' | 'west'; launch: '' | 'designated' | 'unreviewed'; response: '' | 'hold-return' | 'continue' };
-export type GameState = { phase: Phase; plan: Plan; planErrors: number; flightErrors: number; adaptErrors: number; planCleared: boolean; safeResponse: boolean; landed: boolean; feedback: string; checkpoint: boolean };
-export const initialState = (): GameState => ({ phase: 'intro', plan: { route: '', launch: '', response: '' }, planErrors: 0, flightErrors: 0, adaptErrors: 0, planCleared: false, safeResponse: false, landed: false, feedback: '', checkpoint: false });
-export function planIsSafe(plan: Plan) { return plan.route === 'east' && plan.launch === 'designated' && plan.response === 'hold-return'; }
-export function inKnownZone(x: number, z: number) { return x < -2 && x > -9 && z < -3 && z > -15; }
-export function inNewZone(_x: number, z: number) { return z < -15; }
-export function scoreBreakdown(state: GameState) {
-  return { planning: state.planCleared ? Math.max(0, 40 - Math.min(20, state.planErrors * 5)) : 0,
-    flight: state.checkpoint ? Math.max(0, 30 - Math.min(20, state.flightErrors * 5)) : 0,
-    adapt: state.safeResponse && state.landed ? Math.max(0, 30 - Math.min(20, state.adaptErrors * 10)) : 0 };
+export type Route = 'east' | 'west';
+export type Phase = 'brief' | 'flight' | 'result';
+export type ObjectiveId = 'roof' | 'facade';
+export type GameState = {
+  phase: Phase;
+  route: Route;
+  completed: ObjectiveId[];
+  craneActive: boolean;
+  landed: boolean;
+  battery: number;
+  encounters: number;
+  elapsed: number;
+};
+
+export const PAD = { x: 0, z: 65 };
+export const OBJECTIVES = {
+  roof: { x: 37, z: -34, y: 11, label: 'Roof edge' },
+  facade: { x: -39, z: -48, y: 8, label: 'Façade' },
+} as const;
+export const CRANE = { x: 0, z: 5, radius: 16 };
+
+export function initialState(): GameState {
+  return { phase: 'brief', route: 'east', completed: [], craneActive: false, landed: false, battery: 100, encounters: 0, elapsed: 0 };
 }
-export function score(state: GameState) { const part=scoreBreakdown(state); return part.planning+part.flight+part.adapt; }
-export function passed(state: GameState) { return state.phase === 'result' && state.safeResponse && state.landed && score(state) >= 80; }
-export function canLand(x: number, z: number, y: number) { return Math.hypot(x, z - 8) < 4.5 && y <= 2.8; }
+export function objectiveOrder(route: Route): ObjectiveId[] { return route === 'east' ? ['roof', 'facade'] : ['facade', 'roof']; }
+export function withinObjective(x: number, y: number, z: number, id: ObjectiveId): boolean {
+  const target = OBJECTIVES[id];
+  return Math.hypot(x - target.x, z - target.z) < 7 && Math.abs(y - target.y) < 5;
+}
+export function withinPad(x: number, y: number, z: number): boolean {
+  return Math.hypot(x - PAD.x, z - PAD.z) < 6 && y < 2.2;
+}
+export function withinCraneZone(x: number, z: number): boolean {
+  return Math.hypot(x - CRANE.x, z - CRANE.z) < CRANE.radius;
+}
+export function canFinish(state: GameState): boolean { return state.completed.length === 2 && state.landed; }
+export function score(state: GameState): number {
+  if (!canFinish(state)) return 0;
+  return Math.max(70, 100 - state.encounters * 10 - (state.battery < 15 ? 10 : 0));
+}
