@@ -1,0 +1,15 @@
+{
+  "name": "@drone4build/m2-2-thermal-triage",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build --base ./",
+    "test": "node --experimental-strip-types --test src/rules.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}
