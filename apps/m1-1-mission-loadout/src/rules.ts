@@ -1,17 +1,7 @@
-export const platforms = ['multirotor', 'fixedWing'] as const;
-export type Platform = typeof platforms[number];
-export const sensors = ['rgb', 'thermal'] as const;
-export type Sensor = typeof sensors[number];
-export type Part = `platform:${Platform}` | `sensor:${Sensor}` | 'battery:charged';
-
-export interface Build {
-  platform: Platform | null;
-  sensor: Sensor | null;
-  battery: 'low' | 'charged';
-  angle: number;
-  tests: number;
-  lastTest: TestOutcome | null;
-}
+export type Payload = 'rgb' | 'thermal';
+export type Battery = 'low' | 'charged';
+export type ComponentId = Payload | `battery-${Battery}`;
+export type MountType = 'payload' | 'battery';
 
 export interface TestOutcome {
   hover: boolean;
@@ -20,28 +10,64 @@ export interface TestOutcome {
   success: boolean;
 }
 
+export interface Build {
+  version: 3;
+  platform: 'multirotor';
+  payload: Payload | null;
+  battery: Battery | null;
+  tests: number;
+  swaps: number;
+  lastTest: TestOutcome | null;
+}
+
 export function newBuild(): Build {
-  // The deliberately unsuitable pre-build gives the learner something tangible to diagnose.
-  return { platform: 'fixedWing', sensor: 'thermal', battery: 'low', angle: -18, tests: 0, lastTest: null };
+  return { version: 3, platform: 'multirotor', payload: 'thermal', battery: 'low', tests: 0, swaps: 0, lastTest: null };
 }
 
-export function mount(build: Build, part: Part): Build {
-  if (part.startsWith('platform:')) return { ...build, platform: part.slice(9) as Platform, lastTest: null };
-  if (part.startsWith('sensor:')) return { ...build, sensor: part.slice(7) as Sensor, lastTest: null };
-  return { ...build, battery: 'charged', lastTest: null };
+export function componentMount(component: ComponentId): MountType {
+  return component.startsWith('battery-') ? 'battery' : 'payload';
 }
 
-export function removeSensor(build: Build): Build {
-  return { ...build, sensor: null, lastTest: null };
+export function compatible(component: ComponentId, mount: MountType): boolean {
+  return componentMount(component) === mount;
+}
+
+export function attach(build: Build, component: ComponentId): Build {
+  if (componentMount(component) === 'payload') {
+    return { ...build, payload: component as Payload, swaps: build.swaps + 1, lastTest: null };
+  }
+  return { ...build, battery: component.slice(8) as Battery, swaps: build.swaps + 1, lastTest: null };
+}
+
+export function detach(build: Build, mount: MountType): Build {
+  return mount === 'payload'
+    ? { ...build, payload: null, swaps: build.swaps + 1, lastTest: null }
+    : { ...build, battery: null, swaps: build.swaps + 1, lastTest: null };
 }
 
 export function testOutcome(build: Build): TestOutcome {
   const hover = build.platform === 'multirotor';
-  const visual = build.sensor === 'rgb';
+  const visual = build.payload === 'rgb';
   const sustained = build.battery === 'charged';
   return { hover, visual, sustained, success: hover && visual && sustained };
 }
 
 export function recordTest(build: Build): Build {
   return { ...build, tests: build.tests + 1, lastTest: testOutcome(build) };
+}
+
+export function restoreBuild(value: unknown): Build | null {
+  if (!value || typeof value !== 'object') return null;
+  const state = value as Partial<Build>;
+  if (state.version !== 3 || state.platform !== 'multirotor') return null;
+  if (![null, 'rgb', 'thermal'].includes(state.payload ?? null)) return null;
+  if (![null, 'low', 'charged'].includes(state.battery ?? null)) return null;
+  if (!Number.isInteger(state.tests) || (state.tests ?? -1) < 0) return null;
+  if (!Number.isInteger(state.swaps) || (state.swaps ?? -1) < 0) return null;
+  if (state.lastTest !== null && state.lastTest !== undefined) {
+    const result = state.lastTest;
+    if (typeof result !== 'object' || !['hover', 'visual', 'sustained', 'success']
+      .every(key => typeof (result as unknown as Record<string, unknown>)[key] === 'boolean')) return null;
+  }
+  return state as Build;
 }
