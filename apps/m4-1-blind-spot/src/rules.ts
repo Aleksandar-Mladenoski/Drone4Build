@@ -1,70 +1,68 @@
-export type RegionId = 'a1'|'a2'|'a3'|'a4'|'b1'|'b2'|'b3'|'b4'|'c1'|'c2'|'c3'|'c4';
-export type Material = 'concrete'|'cladding';
-export type AiState = 'detected'|'clean';
-export type Truth = 'issue'|'clear';
-export type EvidenceLayer = 'raw'|'ai'|'focus'|'context';
-export type Phase = 'intro'|'audit'|'report';
-export type Region = { id:RegionId; bay:string; material:Material; ai:AiState; confidence:number; truth:Truth; x:number; y:number; w:number; h:number };
+export type RegionId='p1'|'p2'|'p3'|'p4'|'p5'|'p6'|'p7'|'p8';
+export type Surface='render'|'window'|'cladding'|'parapet'|'plinth';
+export type Context='standard'|'dark-cladding'|'soft-image';
+export type AiState='detected'|'clean';
+export type Truth='issue'|'clear';
+export type Mask='tight'|'oversize'|'shifted'|'fragmented'|'none';
+export type EvidenceLayer='raw'|'ai'|'context'|'focus';
+export type Decision='validate'|'flag';
+export type Phase='intro'|'audit'|'report';
+export type Region={id:RegionId;sample:number;surface:Surface;context:Context;ai:AiState;confidence:number;truth:Truth;mask:Mask;quality:'clear'|'shadow'|'soft';x:number;y:number;w:number;h:number};
+export type Review={id:RegionId;decision:Decision};
 
-export const MAX_PROBES = 6;
-export const REGIONS:Region[] = [
-  {id:'a1',bay:'A1',material:'concrete',ai:'detected',confidence:84,truth:'issue',x:154,y:142,w:176,h:142},
-  {id:'a2',bay:'A2',material:'concrete',ai:'clean',confidence:90,truth:'clear',x:338,y:142,w:176,h:142},
-  {id:'a3',bay:'A3',material:'concrete',ai:'clean',confidence:76,truth:'clear',x:522,y:142,w:176,h:142},
-  {id:'a4',bay:'A4',material:'cladding',ai:'detected',confidence:91,truth:'clear',x:706,y:142,w:138,h:142},
-  {id:'b1',bay:'B1',material:'concrete',ai:'clean',confidence:87,truth:'clear',x:154,y:292,w:176,h:142},
-  {id:'b2',bay:'B2',material:'concrete',ai:'detected',confidence:66,truth:'issue',x:338,y:292,w:176,h:142},
-  {id:'b3',bay:'B3',material:'concrete',ai:'clean',confidence:94,truth:'clear',x:522,y:292,w:176,h:142},
-  {id:'b4',bay:'B4',material:'cladding',ai:'clean',confidence:79,truth:'issue',x:706,y:292,w:138,h:142},
-  {id:'c1',bay:'C1',material:'concrete',ai:'clean',confidence:89,truth:'clear',x:154,y:442,w:176,h:126},
-  {id:'c2',bay:'C2',material:'concrete',ai:'clean',confidence:81,truth:'clear',x:338,y:442,w:176,h:126},
-  {id:'c3',bay:'C3',material:'concrete',ai:'detected',confidence:73,truth:'issue',x:522,y:442,w:176,h:126},
-  {id:'c4',bay:'C4',material:'cladding',ai:'clean',confidence:88,truth:'clear',x:706,y:442,w:138,h:126},
+export const MAX_REVIEWS=6;
+export const REGIONS:Region[]=[
+  {id:'p1',sample:1,surface:'render',context:'standard',ai:'detected',confidence:84,truth:'issue',mask:'tight',quality:'clear',x:145,y:156,w:205,h:170},
+  {id:'p2',sample:2,surface:'cladding',context:'dark-cladding',ai:'detected',confidence:92,truth:'clear',mask:'shifted',quality:'clear',x:675,y:130,w:164,h:196},
+  {id:'p3',sample:3,surface:'render',context:'standard',ai:'detected',confidence:58,truth:'issue',mask:'fragmented',quality:'clear',x:365,y:156,w:292,h:170},
+  {id:'p4',sample:4,surface:'cladding',context:'dark-cladding',ai:'detected',confidence:74,truth:'clear',mask:'oversize',quality:'shadow',x:675,y:340,w:164,h:202},
+  {id:'p5',sample:5,surface:'render',context:'standard',ai:'clean',confidence:88,truth:'clear',mask:'none',quality:'clear',x:145,y:340,w:205,h:202},
+  {id:'p6',sample:6,surface:'cladding',context:'dark-cladding',ai:'clean',confidence:79,truth:'issue',mask:'none',quality:'shadow',x:512,y:340,w:145,h:202},
+  {id:'p7',sample:7,surface:'window',context:'soft-image',ai:'detected',confidence:64,truth:'issue',mask:'tight',quality:'soft',x:365,y:340,w:130,h:202},
+  {id:'p8',sample:8,surface:'plinth',context:'dark-cladding',ai:'clean',confidence:83,truth:'clear',mask:'none',quality:'clear',x:145,y:558,w:694,h:55},
 ];
-export type GameState = { version:1; phase:Phase; probes:number; checked:RegionId[]; selected:RegionId|null; evidenceLayer:EvidenceLayer; overlay:number; claddingQuarantined:boolean };
+export type GameState={version:2;phase:Phase;reviews:Review[];selected:RegionId|null;evidenceLayer:EvidenceLayer;overlay:number;usedLayers:EvidenceLayer[];overlayAdjusted:boolean;concernMarked:boolean;aiOverlay:boolean;boardZoom:number};
 
-export function fresh(phase:Phase='intro'):GameState { return {version:1,phase,probes:MAX_PROBES,checked:[],selected:null,evidenceLayer:'ai',overlay:.72,claddingQuarantined:false}; }
+export function fresh(phase:Phase='intro'):GameState{return{version:2,phase,reviews:[],selected:null,evidenceLayer:'raw',overlay:.72,usedLayers:[],overlayAdjusted:false,concernMarked:false,aiOverlay:true,boardZoom:1};}
 export const regionById=(id:RegionId)=>REGIONS.find(region=>region.id===id)!;
-export const mismatch=(region:Region)=>region.ai==='detected' ? region.truth==='clear' : region.truth==='issue';
-export const outcome=(region:Region)=>region.ai==='detected' ? (region.truth==='issue'?'truePositive':'falsePositive') : (region.truth==='issue'?'falseNegative':'trueNegative');
+export const reviewFor=(state:GameState,id:RegionId)=>state.reviews.find(review=>review.id===id);
+export const mismatch=(region:Region)=>region.ai==='detected'?region.truth==='clear':region.truth==='issue';
+export const outcome=(region:Region)=>region.ai==='detected'?(region.truth==='issue'?'truePositive':'falsePositive'):(region.truth==='issue'?'falseNegative':'trueNegative');
+export function expectedDecision(region:Region):Decision{return region.ai==='detected'?(region.truth==='issue'?'validate':'flag'):(region.truth==='issue'?'flag':'validate');}
 
-export function verify(state:GameState,id:RegionId):GameState {
-  if(state.phase!=='audit'||state.probes<=0||state.checked.includes(id)) return state;
-  return {...state,probes:state.probes-1,checked:[...state.checked,id]};
+export function decide(state:GameState,id:RegionId,decision:Decision):GameState{
+  if(state.phase!=='audit'||state.reviews.length>=MAX_REVIEWS||reviewFor(state,id))return state;
+  return{...state,reviews:[...state.reviews,{id,decision}]};
 }
-export function canQuarantine(state:GameState):boolean {
-  return state.checked.some(id=>{const r=regionById(id);return r.material==='cladding'&&mismatch(r);});
-}
-export function patternDiscovered(state:GameState):boolean {
-  return state.checked.filter(id=>{const r=regionById(id);return r.material==='cladding'&&mismatch(r);}).length>=2;
-}
-export function canFinalize(state:GameState):boolean { return state.phase==='audit'&&state.checked.length>=4; }
+export function reviewedMismatchCount(state:GameState){return state.reviews.filter(review=>{const region=regionById(review.id);return region.context==='dark-cladding'&&mismatch(region);}).length;}
+export const canMarkConcern=(state:GameState)=>reviewedMismatchCount(state)>=2;
+export const patternDiscovered=(state:GameState)=>canMarkConcern(state)&&state.concernMarked;
+export const canFinalize=(state:GameState)=>state.phase==='audit'&&state.reviews.length>=5;
 
-export type Integrity = { score:number; passed:boolean; mixedSampling:boolean; validated:number; corrected:number; reviewRequired:number; unresolved:number; blindSpot:boolean };
-export function integrity(state:GameState):Integrity {
-  const checked=REGIONS.filter(r=>state.checked.includes(r.id));
-  const mixedSampling=checked.some(r=>r.ai==='detected')&&checked.some(r=>r.ai==='clean');
-  const tp=checked.some(r=>r.ai==='detected'&&r.truth==='issue');
-  const fp=checked.some(r=>r.ai==='detected'&&r.truth==='clear');
-  const fn=checked.some(r=>r.ai==='clean'&&r.truth==='issue');
-  const blindSpot=patternDiscovered(state);
-  const useful=checked.filter(r=>mismatch(r)||r.truth==='issue').length;
-  const score=Math.min(100,20+(mixedSampling?20:0)+(tp?15:0)+(fp?15:0)+(fn?20:0)+(state.claddingQuarantined?15:0)+(blindSpot?15:0)+(useful>=3?5:0));
-  const protectedByZone=(r:Region)=>state.claddingQuarantined&&r.material==='cladding';
-  const unresolved=REGIONS.filter(r=>mismatch(r)&&!state.checked.includes(r.id)&&!protectedByZone(r)).length;
-  return {score,passed:score>=75&&mixedSampling&&state.claddingQuarantined&&unresolved===0,
-    mixedSampling,validated:checked.filter(r=>!mismatch(r)).length,corrected:checked.filter(mismatch).length,
-    reviewRequired:state.claddingQuarantined?REGIONS.filter(r=>r.material==='cladding'&&!state.checked.includes(r.id)).length:0,
-    unresolved,blindSpot};
+export type Integrity={score:number;passed:boolean;correct:number;validated:number;flagged:number;falsePositivesPrevented:number;missedFindingsFound:number;reviewRequired:number;unresolved:number;mixedSampling:boolean;blindSpot:boolean};
+export function integrity(state:GameState):Integrity{
+  const reviewed=state.reviews.map(review=>({review,region:regionById(review.id)}));
+  const mixedSampling=reviewed.some(x=>x.region.ai==='detected')&&reviewed.some(x=>x.region.ai==='clean');
+  const correct=reviewed.filter(x=>x.review.decision===expectedDecision(x.region)).length;
+  const falsePositivesPrevented=reviewed.filter(x=>outcome(x.region)==='falsePositive'&&x.review.decision==='flag').length;
+  const missedFindingsFound=reviewed.filter(x=>outcome(x.region)==='falseNegative'&&x.review.decision==='flag').length;
+  const lowConfidenceValidated=reviewed.some(x=>x.region.id==='p3'&&x.review.decision==='validate');
+  const incorrect=reviewed.length-correct;
+  const score=Math.max(0,Math.min(100,20+(mixedSampling?15:0)+Math.min(20,correct*4)+Math.min(20,falsePositivesPrevented*10)+(missedFindingsFound?20:0)+(lowConfidenceValidated?10:0)+(state.concernMarked?15:0)-incorrect*8));
+  const contained=(region:Region)=>state.concernMarked&&region.context==='dark-cladding';
+  const unresolved=REGIONS.filter(region=>mismatch(region)&&!contained(region)&&reviewFor(state,region.id)?.decision!==expectedDecision(region)).length;
+  return{score,passed:score>=75&&mixedSampling&&state.concernMarked&&unresolved===0,correct,
+    validated:reviewed.filter(x=>x.review.decision==='validate').length,flagged:reviewed.filter(x=>x.review.decision==='flag').length,
+    falsePositivesPrevented,missedFindingsFound,reviewRequired:state.concernMarked?REGIONS.filter(r=>r.context==='dark-cladding'&&!reviewFor(state,r.id)).length:0,
+    unresolved,mixedSampling,blindSpot:patternDiscovered(state)};
 }
 
-export function restore(value:unknown):GameState|null {
-  if(!value||typeof value!=='object') return null;
-  const s=value as Partial<GameState>;
-  const ids=new Set(REGIONS.map(r=>r.id));
-  if(s.version!==1||!['intro','audit','report'].includes(s.phase??'')||!Number.isInteger(s.probes)||s.probes!<0||s.probes!>MAX_PROBES||
-    !Array.isArray(s.checked)||s.checked.some(id=>!ids.has(id))||new Set(s.checked).size!==s.checked.length||s.checked.length!==MAX_PROBES-s.probes!||
-    (s.selected!==null&&!ids.has(s.selected as RegionId))||!['raw','ai','focus','context'].includes(s.evidenceLayer??'')||
-    !Number.isFinite(s.overlay)||s.overlay!<0||s.overlay!>1||typeof s.claddingQuarantined!=='boolean') return null;
+export function restore(value:unknown):GameState|null{
+  if(!value||typeof value!=='object')return null;const s=value as Partial<GameState>,ids=new Set(REGIONS.map(r=>r.id));
+  if(s.version!==2||!['intro','audit','report'].includes(s.phase??'')||!Array.isArray(s.reviews)||s.reviews.length>MAX_REVIEWS||
+    s.reviews.some(r=>!r||!ids.has(r.id)||!['validate','flag'].includes(r.decision))||new Set(s.reviews.map(r=>r.id)).size!==s.reviews.length||
+    (s.selected!==null&&!ids.has(s.selected as RegionId))||!['raw','ai','context','focus'].includes(s.evidenceLayer??'')||
+    !Number.isFinite(s.overlay)||s.overlay!<0||s.overlay!>1||!Array.isArray(s.usedLayers)||s.usedLayers.some(layer=>!['raw','ai','context','focus'].includes(layer))||
+    typeof s.overlayAdjusted!=='boolean'||typeof s.concernMarked!=='boolean'||typeof s.aiOverlay!=='boolean'||!Number.isFinite(s.boardZoom)||s.boardZoom!<.9||s.boardZoom!>1.3)return null;
   return s as GameState;
 }

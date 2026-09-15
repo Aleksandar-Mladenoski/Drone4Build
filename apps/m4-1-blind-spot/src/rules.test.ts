@@ -1,40 +1,27 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { MAX_PROBES, REGIONS, canFinalize, canQuarantine, fresh, integrity, outcome, patternDiscovered, restore, verify } from './rules.ts';
+import test from'node:test';import assert from'node:assert/strict';
+import{MAX_REVIEWS,REGIONS,canFinalize,canMarkConcern,decide,expectedDecision,fresh,integrity,outcome,restore,reviewedMismatchCount}from'./rules.ts';
 
-test('scenario contains detections, non-detections, every required outcome and one clustered weakness',()=>{
-  assert.deepEqual(new Set(REGIONS.map(outcome)),new Set(['truePositive','falsePositive','falseNegative','trueNegative']));
-  assert.ok(REGIONS.some(r=>r.ai==='detected'&&r.confidence>=90&&r.truth==='clear'));
-  assert.ok(REGIONS.some(r=>r.ai==='clean'&&r.confidence>=75&&r.truth==='issue'));
-  assert.ok(REGIONS.filter(r=>outcome(r)==='trueNegative').length>2);
-  assert.ok(REGIONS.filter(r=>r.ai!== (r.truth==='issue'?'detected':'clean')).every(r=>r.material==='cladding'));
+test('eight diverse samples include required AI outcomes and fallible confidence',()=>{
+  assert.equal(REGIONS.length,8);assert.deepEqual(new Set(REGIONS.map(outcome)),new Set(['truePositive','falsePositive','falseNegative','trueNegative']));
+  assert.ok(REGIONS.some(r=>r.confidence>=90&&outcome(r)==='falsePositive'));assert.ok(REGIONS.some(r=>r.confidence<60&&outcome(r)==='truePositive'));
+  assert.ok(REGIONS.some(r=>r.ai==='clean'&&r.truth==='issue'));assert.ok(new Set(REGIONS.map(r=>r.surface)).size>=4);
+  assert.ok(REGIONS.filter(r=>r.ai!==(r.truth==='issue'?'detected':'clean')).every(r=>r.context==='dark-cladding'));
 });
-
-test('a verification probe reveals one region once and cannot be brute-forced',()=>{
-  let state=fresh('audit'); state=verify(state,'a1'); state=verify(state,'a1');
-  assert.equal(state.probes,MAX_PROBES-1); assert.deepEqual(state.checked,['a1']);
-  for(const id of ['a2','a3','a4','b1','b2','b3'] as const) state=verify(state,id);
-  assert.equal(state.probes,0); assert.equal(state.checked.length,MAX_PROBES);
-  assert.ok(REGIONS.length>state.checked.length);
+test('human decisions consume limited review capacity once per sample',()=>{
+  let state=fresh('audit');state=decide(state,'p1','validate');state=decide(state,'p1','flag');
+  assert.deepEqual(state.reviews,[{id:'p1',decision:'validate'}]);for(const id of['p2','p3','p4','p5','p6','p7']as const)state=decide(state,id,expectedDecision(REGIONS.find(r=>r.id===id)!));
+  assert.equal(state.reviews.length,MAX_REVIEWS);assert.equal(decide(state,'p8','validate'),state);assert.equal(canFinalize(state),true);
 });
-
-test('two cladding mismatches expose the systematic blind spot and allow spatial quarantine',()=>{
-  let state=fresh('audit'); state=verify(state,'a4');
-  assert.equal(canQuarantine(state),true); assert.equal(patternDiscovered(state),false);
-  state=verify(state,'b4'); assert.equal(patternDiscovered(state),true);
-  assert.equal(integrity({...state,claddingQuarantined:true}).unresolved,0);
+test('repeated cladding errors support a broader reliability concern',()=>{
+  let state=fresh('audit');state=decide(state,'p2','flag');assert.equal(reviewedMismatchCount(state),1);assert.equal(canMarkConcern(state),false);
+  state=decide(state,'p4','flag');assert.equal(reviewedMismatchCount(state),2);assert.equal(canMarkConcern(state),true);
 });
-
-test('mixed strategic sampling and quarantine creates a trustworthy report',()=>{
-  let strong=fresh('audit'); for(const id of ['a1','a4','b4','c4'] as const) strong=verify(strong,id);
-  strong={...strong,claddingQuarantined:true};
-  assert.equal(canFinalize(strong),true); assert.deepEqual(integrity(strong),{score:100,passed:true,mixedSampling:true,validated:2,corrected:2,reviewRequired:0,unresolved:0,blindSpot:true});
-  let poor=fresh('audit'); for(const id of ['a1','b2','c3','a4'] as const) poor=verify(poor,id);
-  assert.equal(integrity(poor).passed,false); assert.equal(integrity(poor).mixedSampling,false);
+test('evidence-based mixed decisions produce a trustworthy inspection',()=>{
+  let state=fresh('audit');for(const id of['p1','p2','p3','p4','p5','p6']as const)state=decide(state,id,expectedDecision(REGIONS.find(r=>r.id===id)!));state={...state,concernMarked:true};
+  assert.deepEqual(integrity(state),{score:100,passed:true,correct:6,validated:3,flagged:3,falsePositivesPrevented:2,missedFindingsFound:1,reviewRequired:1,unresolved:0,mixedSampling:true,blindSpot:true});
+  let poor=fresh('audit');for(const id of['p1','p2','p3','p4','p7']as const)poor=decide(poor,id,'validate');assert.equal(integrity(poor).passed,false);assert.ok(integrity(poor).unresolved>0);
 });
-
-test('compact audit state restores and malformed state is rejected',()=>{
-  const state={...verify(fresh('audit'),'a4'),selected:'a4' as const,evidenceLayer:'focus' as const,overlay:.4,claddingQuarantined:true};
-  assert.deepEqual(restore(JSON.parse(JSON.stringify(state))),state);
-  assert.equal(restore({...state,probes:6}),null); assert.equal(restore({...state,checked:['x']}),null);
+test('compact version-two state restores and rejects malformed reviews',()=>{
+  const state={...decide(fresh('audit'),'p1','validate'),selected:'p2' as const,usedLayers:['raw','ai']as const,overlayAdjusted:true};
+  assert.deepEqual(restore(JSON.parse(JSON.stringify(state))),state);assert.equal(restore({...state,version:1}),null);assert.equal(restore({...state,reviews:[{id:'x',decision:'flag'}]}),null);
 });
