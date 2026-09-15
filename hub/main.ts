@@ -5,7 +5,8 @@ const games = [
   ['m1-1-mission-loadout','M1.1','Hangar Zero · Tactile 3D prototype'],
   ['m1-2-site-mission-control','M1.2','Site Mission Control: Live Shift'],
   ['m2-2-thermal-triage','M2.2','Thermal Investigator'],
-  ['m3-2-digital-handover','M3.2','Reality Merge']
+  ['m3-2-digital-handover','M3.2','Reality Merge'],
+  ['m4-1-blind-spot','M4.1','Blind Spot · Gameplay Prototype / Vertical Slice']
 ] as const;
 const app=document.getElementById('root')!;
 const locale=new URLSearchParams(location.search).get('lang')||'en';
