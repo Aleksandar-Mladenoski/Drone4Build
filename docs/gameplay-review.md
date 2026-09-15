@@ -4,7 +4,7 @@ Run `npm run hub` and open the local address printed by Vite. The hub links to t
 
 | Slice | Review play path |
 | --- | --- |
-| M1.1 Hangar Zero | Run the starting build, watch the short flight test, return to the bench, mount the multirotor, RGB sensor, and charged battery, then retest. Try drag-and-drop as well as select-and-mount. |
+| M1.1 Hangar Zero | Inspect and orbit the physical aircraft. Click its low battery to read the indicator state, then run the starting test. Return to the same bench, drag the charged battery and RGB camera into their illuminated 3D mounts, and retest. Check detachment, incompatible-mount rejection, zoom, camera reset, successful replay, and whether the interaction feels physical. |
 | M1.2 Live Shift | Pick either approach route, launch, use W/A/S/D to fly and Q/E to change altitude. C cycles chase, FPV, and orbit cameras; H toggles hover. Hold nearly still inside each turquoise inspection ring, watch the crane begin operating, go around its marked zone, then return low and slow to the gold pad and press L. Check both route orders and the site map. |
 | M2.2 Thermal Investigator | Switch RGB, thermal, and split modes; click to aim, drag to pan, zoom, and change viewpoint. Capture the persistent warm wall seam from two viewpoints. Compare the glazed bay from two viewpoints, reject a likely reflection, and file the evidence. |
 | M3.2 Reality Merge | Drag the survey layer and amber rotation ring until all three site controls converge. Sweep the clip and adjust opacity, then click the shifted existing opening rather than the planned outline. |
