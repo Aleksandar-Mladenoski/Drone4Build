@@ -204,7 +204,7 @@
   "test.rgbActive": "RGB surface capture active",
   "test.thermalActive": "Thermal response capture active",
   "test.completeStage": "Automated run complete",
-  "test.successBody": "The aircraft held its position, recorded six visible façade images, and retained power through the full run.",
+  "test.successBody": "The aircraft followed the crack, paused for six visible façade images, and retained power through the full run.",
   "test.replay": "Reset workshop and replay",
   "workshop.reset": "Reset workshop",
   "status.swaps": "Physical changes: {count}"

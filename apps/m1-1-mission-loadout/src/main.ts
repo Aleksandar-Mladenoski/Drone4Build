@@ -78,6 +78,7 @@ function startWorkshop() {
 function startTest() {
   if (!build.payload || !build.battery) { showMessage('scene.incomplete'); return; }
   disposeScenes(); app.innerHTML = `<div class="hangar-shell">${header()}${testView()}</div>`;
+  document.querySelector('.test-viewport')?.scrollIntoView({ block: 'start' });
   const outcome = testOutcome(build);
   testScene = new TestScene(document.querySelector<HTMLCanvasElement>('#test-canvas')!, outcome, {
     onProgress(progress, captures, stage) {
@@ -96,7 +97,7 @@ function startTest() {
         result.className = `test-result ${outcome.success ? 'success' : 'failure'}`;
         result.innerHTML = `<strong>${tx(outcome.success ? 'test.success' : 'test.needsWork')}</strong><p>${tx(!outcome.sustained ? 'test.batteryBad' : !outcome.visual ? 'test.sensorBad' : 'test.successBody')}</p>`;
       }
-      const button = document.querySelector<HTMLButtonElement>('[data-action="return"]'); if (button) { button.disabled = false; button.focus(); }
+      const button = document.querySelector<HTMLButtonElement>('[data-action="return"]'); if (button) { button.disabled = false; button.focus({ preventScroll: true }); }
       const replay = document.querySelector<HTMLElement>('.replay-button'); if (replay && outcome.success) replay.style.display = 'block';
     },
   });
