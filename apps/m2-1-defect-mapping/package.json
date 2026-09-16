@@ -1,0 +1,10 @@
+{
+  "name": "@drone4build/m2-1-defect-mapping",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build --base ./",
+    "test": "node --experimental-strip-types --test src/rules.test.ts"
+  }
+}
