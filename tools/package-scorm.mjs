@@ -11,7 +11,7 @@ function files(dir) {
     return entry.isDirectory() ? files(path) : [path];
   });
 }
-for (const game of games) {
+for (const game of games.filter(game => game.scorm)) {
   const dir = resolve('dist/apps', game.id);
   if (!existsSync(resolve(dir, 'index.html'))) throw new Error(`Build ${game.code} first`);
   const content = files(dir).map(file => relative(dir, file).replaceAll('\\', '/'));

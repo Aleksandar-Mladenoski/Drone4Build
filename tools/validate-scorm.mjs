@@ -61,7 +61,7 @@ async function serveCheck(file) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   let failed = false;
-  for (const game of games) {
+  for (const game of games.filter(game => game.scorm)) {
     const file = resolve('dist/scorm', game.zip);
     if (!existsSync(file)) { console.error(`${game.code}: missing ZIP`); failed = true; continue; }
     const report = validateZip(file);
